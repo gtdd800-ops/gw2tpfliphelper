@@ -1,1 +1,6 @@
 matplotlib
+streamlit
+requests
+panda
+numpy
+base64
