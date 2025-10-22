@@ -627,25 +627,6 @@ with TAB1:
 
         st.dataframe(df_disp, use_container_width=True, hide_index=True)
 
-        # Heatmap ROI vs Profit (Top 200)
-        st.subheader(T("HeatmapTitle"))
-        hm = view.sort_values("Profit Net (PO)", ascending=False).head(200)
-        if not hm.empty:
-            fig, ax = plt.subplots(figsize=(8,5))
-            ax.hist2d(hm["ROI (%)"], hm["Profit Net (PO)"], bins=30)
-            ax.set_xlabel(T("ROI_col")); ax.set_ylabel(T("TopProfit").split(" ")[0])
-            st.pyplot(fig, clear_figure=True)
-
-        st.subheader(T("Top20Profit"))
-        top20 = view.sort_values("Profit Net (PO)", ascending=False).head(20)
-        if not top20.empty:
-            fig, ax = plt.subplots(figsize=(11,5))
-            ax.bar(range(len(top20)), top20["Profit Net (PO)"])
-            ax.set_xticks(range(len(top20)))
-            ax.set_xticklabels(top20["Nom"], rotation=45, ha="right")
-            ax.set_ylabel("g")
-            st.pyplot(fig, clear_figure=True)
-
         # -------- Optimisation panier (budget) --------
         st.subheader(T("BasketOpt"))
         bcol1, bcol2, bcol3 = st.columns([1,1,1])
@@ -743,5 +724,6 @@ with TAB4:
     st.write("Open-source friendly. N'hésite pas à modifier/adapter.")
     st.write("Utilisation de la base de données de gw2tp.com")
     st.caption("🔨 escarbeille.4281 · 💬 Discord: escarmouche")
+
 
 
