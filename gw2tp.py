@@ -739,6 +739,7 @@ with TAB3:
 {T('TipLines')}")
 
 with TAB4:
-    st.write(T("AboutLine1"))
-    st.write(T("AboutLine2"))
-    st.caption(T("MadeWith"))
+    st.write("GW2TP Flips v3")
+    st.write("Open-source friendly. N'hésite pas à modifier/adapter.")
+    st.write("Utilisation de la base de données de gw2tp.com")
+    st.caption("🔨 escarbeille.4281 · 💬 Discord: escarmouche"))
