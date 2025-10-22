@@ -1,6 +1,10 @@
-matplotlib
 streamlit
-requests
-panda
+streamlit-autorefresh
+pandas
 numpy
-base64
+requests
+urllib3
+matplotlib
+pyarrow
+brotli
+zstandard
