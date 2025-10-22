@@ -162,7 +162,7 @@ I18N = {
     "ID": {"en": "ID", "de": "ID", "es": "ID"},
     "ChatCode": {"en": "ChatCode", "de": "ChatCode", "es": "ChatCode"},
 
-    # Section prix g/s/c (sans le mot "emoji")
+    # Section prix g/s/c
     "Affichage prix (g/s/c)": {
         "en": "Price display (g/s/c)",
         "de": "Preisanzeige (g/s/c)",
@@ -176,6 +176,7 @@ I18N = {
     "Profit Net": {"en": "Net Profit", "de": "Nettogewinn", "es": "Beneficio neto"},
     "Prix Achat": {"en": "Buy Price", "de": "Kaufpreis", "es": "Precio de compra"},
     "Vente nette (85%)": {"en": "Net sell (85%)", "de": "Nettoverkauf (85%)", "es": "Venta neta (85%)"},
+    "Copier": {"en": "Copy", "de": "Kopieren", "es": "Copiar"},
 
     # Graphes / labels
     "Métrique du graphique": {
@@ -586,17 +587,7 @@ if df_all.empty:
 else:
     st.caption(f"{len(df_all):,} {T('objets — période historique : ')}{hist_hours} h{T(' | ΔSupply/Demand : ')}{trend_hours} h")
 
-    # Dataframe principal (entêtes traduites)
-    cols = ["Nom","Profit Net (PO)","ROI (%)","Score",
-            "Prix Achat (PO)","Prix Vente Net (PO)","Quantité (min)",
-            "Supply","Demand","ID","ChatCode"]
-    if show_history:
-        cols[3:3] = ["Vendu période","Acheté période","ΔSupply","ΔDemand"]
-
-    display_df = df_all[cols].rename(columns={c: T(c) for c in cols})
-    st.dataframe(display_df, use_container_width=True, hide_index=True)
-
-    # ----- Table lisible g/s/c (sans le mot "emoji") -----
+    # ----- Table lisible g/s/c avec copier ChatCode (remplace le 2e tableau) -----
     st.subheader(T("Affichage prix (g/s/c)"))
     if not df_all.empty:
         max_rows_emo = st.slider(T("Lignes à afficher (prix g/s/c)"), 10, 500, 100, 10)
@@ -615,51 +606,84 @@ else:
             "ID": T("ID"),
             "ChatCode": T("ChatCode"),
         })
-        st.table(view_gsc)  # table statique
 
-    # ----- Copie rapide ChatCodes -----
-    st.subheader(T("Copie rapide des ChatCodes"))
-    top_n = st.slider(T("Combien d'items afficher"), 10, 200, 50, 10)
-    sample = df_all.head(top_n)[["Nom","ID","ChatCode"]].to_dict(orient="records")
-    items_json = json.dumps(sample, ensure_ascii=True)
-    comp_height = min(800, 38 * max(1, len(sample)) + 80)
-    components.html(f'''
-    <style>
-      .cp-wrap {{font-family: system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;
-                 border:1px solid #e5e7eb;border-radius:8px;padding:8px 8px 0}}
-      .cp-row {{display:grid;grid-template-columns:1fr max-content max-content;gap:8px;
-                align-items:center;padding:6px 4px;border-bottom:1px dashed #eee}}
-      .cp-row:last-child {{border-bottom:none}}
-      .cp-name {{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}}
-      .cp-code {{cursor:pointer;background:#f3f4f6;padding:2px 6px;border-radius:6px;
-                 font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}}
-      .cp-code.ok {{background:#dcfce7}}
-      .cp-btn {{padding:4px 8px;border-radius:6px;border:1px solid #d1d5db;background:#fff;cursor:pointer}}
-      .cp-btn:hover {{background:#f9fafb}}
-      .cp-hint {{color:#6b7280;font-size:12px;margin:6px 0 8px}}
-    </style>
-    <div class="cp-wrap">
-      <div class="cp-hint">{T("Clique sur le chat code pour copier (ou utilise le bouton).")}</div>
-      <div id="cp-list"></div>
-    </div>
-    <script>
-      const items = {items_json};
-      const list = document.getElementById('cp-list');
-      function copyText(txt, el) {{
-        if(navigator.clipboard) navigator.clipboard.writeText(txt);
-        el.classList.add('ok'); setTimeout(()=>el.classList.remove('ok'),700);
-      }}
-      items.forEach(it=>{{
-        const row=document.createElement('div'); row.className='cp-row';
-        const name=document.createElement('div'); name.className='cp-name'; name.textContent=it.Nom||('Item '+it.ID);
-        const code=document.createElement('code'); code.className='cp-code'; code.textContent=it.ChatCode; code.title='Click to copy';
-        code.onclick=()=>copyText(it.ChatCode, code);
-        const btn=document.createElement('button'); btn.className='cp-btn'; btn.textContent='{T("Copier")}';
-        btn.onclick=()=>copyText(it.ChatCode, code);
-        row.appendChild(name); row.appendChild(code); row.appendChild(btn); list.appendChild(row);
-      }});
-    </script>
-    ''', height=comp_height)
+        # Rendu HTML interactif avec copies intégrées
+        records = view_gsc.to_dict(orient="records")
+        items_json2 = json.dumps(records, ensure_ascii=True)
+        comp_height2 = min(1000, 44 * max(1, len(records)) + 160)
+
+        components.html(f'''
+        <style>
+          .gsc-wrap {{
+            font-family: system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;
+            border:1px solid #e5e7eb;border-radius:10px;overflow:hidden
+          }}
+          .gsc-head, .gsc-row {{
+            display:grid;
+            grid-template-columns: 1.5fr 0.9fr 0.7fr 1.0fr 1.0fr 0.9fr 0.8fr 0.8fr 0.7fr 1.2fr 0.8fr;
+            gap:8px; align-items:center;
+          }}
+          .gsc-head {{ background:#f8fafc; padding:10px 12px; font-weight:600; border-bottom:1px solid #eef2f7 }}
+          .gsc-row {{ padding:10px 12px; border-bottom:1px dashed #eef2f7 }}
+          .gsc-row:last-child {{ border-bottom:none }}
+          .gsc-code {{
+            cursor:pointer;background:#f3f4f6;padding:3px 6px;border-radius:6px;
+            font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; white-space:nowrap; overflow:hidden; text-overflow:ellipsis
+          }}
+          .gsc-code.ok {{ background:#dcfce7 }}
+          .gsc-btn {{
+            padding:6px 10px;border-radius:8px;border:1px solid #d1d5db;background:#fff;cursor:pointer;white-space:nowrap
+          }}
+          .gsc-btn:hover {{ background:#f9fafb }}
+          .gsc-muted {{ color:#6b7280 }}
+          .gsc-title {{ white-space:nowrap; overflow:hidden; text-overflow:ellipsis }}
+        </style>
+        <div class="gsc-wrap">
+          <div class="gsc-head">
+            <div>{T("Nom")}</div>
+            <div>{T("Profit Net")}</div>
+            <div>{T("ROI (%)")}</div>
+            <div>{T("Prix Achat")}</div>
+            <div>{T("Vente nette (85%)")}</div>
+            <div>{T("Quantité (min)")}</div>
+            <div>{T("Supply")}</div>
+            <div>{T("Demand")}</div>
+            <div>{T("ID")}</div>
+            <div>{T("ChatCode")}</div>
+            <div class="gsc-muted">{T("Copier")}</div>
+          </div>
+          <div id="gsc-list"></div>
+        </div>
+        <script>
+          const rows = {items_json2};
+          const list = document.getElementById('gsc-list');
+          function copyText(txt, el) {{
+            if (navigator.clipboard) navigator.clipboard.writeText(txt);
+            el.classList.add('ok'); setTimeout(()=>el.classList.remove('ok'), 700);
+          }}
+          rows.forEach(r => {{
+            const row = document.createElement('div'); row.className = 'gsc-row';
+            const c = (txt, cls='') => {{ const d=document.createElement('div'); d.className = cls; d.textContent = txt; return d; }};
+            const code = document.createElement('code'); code.className = 'gsc-code'; code.textContent = r["{T("ChatCode")}"];
+            code.title = 'Click to copy'; code.onclick = () => copyText(r["{T("ChatCode")}"], code);
+            const btn = document.createElement('button'); btn.className='gsc-btn'; btn.textContent='{T("Copier")}';
+            btn.onclick = () => copyText(r["{T("ChatCode")}"], code);
+
+            row.appendChild(c(r["{T("Nom")}"], 'gsc-title'));
+            row.appendChild(c(r["{T("Profit Net")}"]));
+            row.appendChild(c(r["{T("ROI (%)")}"]));
+            row.appendChild(c(r["{T("Prix Achat")}"]));
+            row.appendChild(c(r["{T("Vente nette (85%)")}"]));
+            row.appendChild(c(String(r["{T("Quantité (min)")}"])));
+            row.appendChild(c(String(r["{T("Supply")}"])));
+            row.appendChild(c(String(r["{T("Demand")}"])));
+            row.appendChild(c(String(r["{T("ID")}"])));
+            row.appendChild(code);
+            row.appendChild(btn);
+            list.appendChild(row);
+          }});
+        </script>
+        ''', height=comp_height2)
 
     # ----- CSV (haut) -----
     st.download_button(T("Télécharger CSV (résultats filtrés)"),
