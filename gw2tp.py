@@ -742,7 +742,7 @@ with TAB1:
                     "Prix Achat (g)": round(buy_c/10000.0,2),
                     "Qté": take,
                     "Coût (g)": round(cost_c/10000.0,2),
-                    "Profit unitaire (g)": float(r["Profit Net (PO)"]);
+                    "Profit unitaire (g)": float(r["Profit Net (PO)"]),
                     "Profit/h item": float(r["Profit/h (est)"]),
                     "ChatCode": r["ChatCode"],
                 })
@@ -801,4 +801,5 @@ with TAB4:
     st.write("Open-source friendly. N'hésite pas à modifier/adapter.")
     st.write("Utilisation de l'API officielle Guild Wars 2: /v2/commerce/prices & /v2/items")
     st.caption("🔨 escarbeille.4281 · 💬 Discord: escarmouche")
+
 
