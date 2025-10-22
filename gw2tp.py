@@ -610,9 +610,10 @@ else:
     # ----- Table lisible g/s/c avec copier + scroll -----
     st.subheader(T("Affichage prix (g/s/c)"))
     if not df_all.empty:
-        # on garde un cap en haut pour ne pas bourrer le DOM côté client
+        # ======== NOUVEAU : en-têtes cliquables pour trier ========
         max_rows_emo = st.slider(T("Lignes à afficher (prix g/s/c)"), 10, 500, 100, 10)
-        view_gsc = df_all.head(max_rows_emo)[[
+
+        view_display = df_all.head(max_rows_emo)[[
             "Nom","Profit Net (gsc)","ROI (%)","Prix Achat (gsc)","Prix Vente Net (gsc)",
             "Quantité (min)","Supply","Demand","ID","ChatCode"
         ]].rename(columns={
@@ -628,7 +629,26 @@ else:
             "ChatCode": T("ChatCode"),
         })
 
-        records = view_gsc.to_dict(orient="records")
+        # colonnes "brutes" pour un tri numérique fiable
+        view_raw = df_all.head(max_rows_emo)[[
+            "Profit Net (c)","Prix Achat (c)","Prix Vente Net (c)","ROI (%)",
+            "Quantité (min)","Supply","Demand","ID"
+        ]]
+
+        records = []
+        for disp_row, raw_row in zip(view_display.to_dict("records"), view_raw.to_dict("records")):
+            rec = dict(disp_row)
+            # champs cachés pour le tri (noms stables, non traduits)
+            rec["_profit_c"] = int(raw_row["Profit Net (c)"]) if pd.notna(raw_row["Profit Net (c)"]) else 0
+            rec["_buy_c"]    = int(raw_row["Prix Achat (c)"])   if pd.notna(raw_row["Prix Achat (c)"])   else 0
+            rec["_sell_c"]   = int(raw_row["Prix Vente Net (c)"]) if pd.notna(raw_row["Prix Vente Net (c)"]) else 0
+            rec["_roi"]      = float(raw_row["ROI (%)"]) if pd.notna(raw_row["ROI (%)"]) else 0.0
+            rec["_qmin"]     = int(raw_row["Quantité (min)"]) if pd.notna(raw_row["Quantité (min)"]) else 0
+            rec["_supply"]   = int(raw_row["Supply"]) if pd.notna(raw_row["Supply"]) else 0
+            rec["_demand"]   = int(raw_row["Demand"]) if pd.notna(raw_row["Demand"]) else 0
+            rec["_id"]       = int(raw_row["ID"]) if pd.notna(raw_row["ID"]) else 0
+            records.append(rec)
+
         items_json2 = json.dumps(records, ensure_ascii=True)
 
         components.html(f'''
@@ -650,6 +670,8 @@ else:
             position: sticky; top: 0; z-index: 5;
             background:#f8fafc; padding:10px 12px; font-weight:600; border-bottom:1px solid #eef2f7
           }}
+          .gsc-head button {{ all:unset; cursor:pointer; display:flex; align-items:center; gap:6px; }}
+          .gsc-head .arrow {{ font-size:12px; color:#6b7280 }}
           .gsc-row {{ padding:10px 12px; border-bottom:1px dashed #eef2f7; background:#fff }}
           .gsc-row:nth-child(odd) {{ background:#fcfcfd }}
           .gsc-row:last-child {{ border-bottom:none }}
@@ -665,52 +687,116 @@ else:
           .gsc-muted {{ color:#6b7280 }}
           .gsc-title {{ white-space:nowrap; overflow:hidden; text-overflow:ellipsis }}
         </style>
+
         <div class="gsc-frame">
           <div class="gsc-scroller" id="gsc-scroll">
-            <div class="gsc-head">
-              <div>{T("Nom")}</div>
-              <div>{T("Profit Net")}</div>
-              <div>{T("ROI (%)")}</div>
-              <div>{T("Prix Achat")}</div>
-              <div>{T("Vente nette (85%)")}</div>
-              <div>{T("Quantité (min)")}</div>
-              <div>{T("Supply")}</div>
-              <div>{T("Demand")}</div>
-              <div>{T("ID")}</div>
+            <div class="gsc-head" id="gsc-head">
+              <button data-key="name"><span>{T("Nom")}</span><span class="arrow" id="arr-name"></span></button>
+              <button data-key="profit"><span>{T("Profit Net")}</span><span class="arrow" id="arr-profit"></span></button>
+              <button data-key="roi"><span>{T("ROI (%)")}</span><span class="arrow" id="arr-roi"></span></button>
+              <button data-key="buy"><span>{T("Prix Achat")}</span><span class="arrow" id="arr-buy"></span></button>
+              <button data-key="sell"><span>{T("Vente nette (85%)")}</span><span class="arrow" id="arr-sell"></span></button>
+              <button data-key="qmin"><span>{T("Quantité (min)")}</span><span class="arrow" id="arr-qmin"></span></button>
+              <button data-key="supply"><span>{T("Supply")}</span><span class="arrow" id="arr-supply"></span></button>
+              <button data-key="demand"><span>{T("Demand")}</span><span class="arrow" id="arr-demand"></span></button>
+              <button data-key="id"><span>{T("ID")}</span><span class="arrow" id="arr-id"></span></button>
               <div>{T("ChatCode")}</div>
               <div class="gsc-muted">{T("Copier")}</div>
             </div>
             <div id="gsc-list"></div>
           </div>
         </div>
+
         <script>
           const rows = {items_json2};
           const list = document.getElementById('gsc-list');
+          const head = document.getElementById('gsc-head');
+          const arrows = {{
+            name: document.getElementById('arr-name'),
+            profit: document.getElementById('arr-profit'),
+            roi: document.getElementById('arr-roi'),
+            buy: document.getElementById('arr-buy'),
+            sell: document.getElementById('arr-sell'),
+            qmin: document.getElementById('arr-qmin'),
+            supply: document.getElementById('arr-supply'),
+            demand: document.getElementById('arr-demand'),
+            id: document.getElementById('arr-id'),
+          }};
+          let sortKey = 'profit';
+          let sortDir = 'desc';
+
           function copyText(txt, el) {{
             if (navigator.clipboard) navigator.clipboard.writeText(txt);
             el.classList.add('ok'); setTimeout(()=>el.classList.remove('ok'), 700);
           }}
-          rows.forEach(r => {{
-            const row = document.createElement('div'); row.className = 'gsc-row';
-            const c = (txt, cls='') => {{ const d=document.createElement('div'); d.className = cls; d.textContent = txt; return d; }};
-            const code = document.createElement('code'); code.className = 'gsc-code'; code.textContent = r["{T("ChatCode")}"];
-            code.title = 'Click to copy'; code.onclick = () => copyText(r["{T("ChatCode")}"], code);
-            const btn = document.createElement('button'); btn.className='gsc-btn'; btn.textContent='{T("Copier")}';
-            btn.onclick = () => copyText(r["{T("ChatCode")}"], code);
 
-            row.appendChild(c(r["{T("Nom")}"], 'gsc-title'));
-            row.appendChild(c(r["{T("Profit Net")}"]));
-            row.appendChild(c(r["{T("ROI (%)")}"]));
-            row.appendChild(c(r["{T("Prix Achat")}"]));
-            row.appendChild(c(r["{T("Vente nette (85%)")}"]));
-            row.appendChild(c(String(r["{T("Quantité (min)")}"])));
-            row.appendChild(c(String(r["{T("Supply")}"])));
-            row.appendChild(c(String(r["{T("Demand")}"])));
-            row.appendChild(c(String(r["{T("ID")}"])));
-            row.appendChild(code);
-            row.appendChild(btn);
-            list.appendChild(row);
+          function render(data) {{
+            list.innerHTML = '';
+            data.forEach(r => {{
+              const row = document.createElement('div'); row.className = 'gsc-row';
+              const c = (txt, cls='') => {{ const d=document.createElement('div'); d.className = cls; d.textContent = txt; return d; }};
+              const code = document.createElement('code'); code.className = 'gsc-code'; code.textContent = r["{T("ChatCode")}"];
+              code.title = 'Click to copy'; code.onclick = () => copyText(r["{T("ChatCode")}"], code);
+              const btn = document.createElement('button'); btn.className='gsc-btn'; btn.textContent='{T("Copier")}';
+              btn.onclick = () => copyText(r["{T("ChatCode")}"], code);
+
+              row.appendChild(c(r["{T("Nom")}"], 'gsc-title'));
+              row.appendChild(c(r["{T("Profit Net")}"]));
+              row.appendChild(c(r["{T("ROI (%)")}"]));
+              row.appendChild(c(r["{T("Prix Achat")}"]));
+              row.appendChild(c(r["{T("Vente nette (85%)")}"]));
+              row.appendChild(c(String(r["{T("Quantité (min)")}"])));
+              row.appendChild(c(String(r["{T("Supply")}"])));
+              row.appendChild(c(String(r["{T("Demand")}"])));
+              row.appendChild(c(String(r["{T("ID")}"])));
+              row.appendChild(code);
+              row.appendChild(btn);
+              list.appendChild(row);
+            }});
+          }}
+
+          function cmp(a, b, key) {{
+            if (key === 'name') {{
+              return (a["{T("Nom")}"] || '').localeCompare(b["{T("Nom")}"] || '', undefined, {{sensitivity:'base'}});
+            }}
+            if (key === 'profit') return (a._profit_c||0) - (b._profit_c||0);
+            if (key === 'buy')    return (a._buy_c||0)    - (b._buy_c||0);
+            if (key === 'sell')   return (a._sell_c||0)   - (b._sell_c||0);
+            if (key === 'roi')    return (a._roi||0)      - (b._roi||0);
+            if (key === 'qmin')   return (a._qmin||0)     - (b._qmin||0);
+            if (key === 'supply') return (a._supply||0)   - (b._supply||0);
+            if (key === 'demand') return (a._demand||0)   - (b._demand||0);
+            if (key === 'id')     return (a._id||0)       - (b._id||0);
+            return 0;
+          }}
+
+          function updateArrows() {{
+            Object.values(arrows).forEach(el => el.textContent = '');
+            const arrow = sortDir === 'asc' ? '↑' : '↓';
+            arrows[sortKey].textContent = arrow;
+          }}
+
+          function doSort(key) {{
+            if (sortKey === key) {{
+              sortDir = (sortDir === 'asc') ? 'desc' : 'asc';
+            }} else {{
+              sortKey = key;
+              sortDir = (key === 'name') ? 'asc' : 'desc';
+            }}
+            const data = [...rows].sort((a,b) => {{
+              const v = cmp(a,b,sortKey);
+              return sortDir === 'asc' ? v : -v;
+            }});
+            updateArrows();
+            render(data);
+          }}
+
+          head.querySelectorAll('button[data-key]').forEach(btn => {{
+            btn.addEventListener('click', () => doSort(btn.dataset.key));
           }});
+
+          updateArrows();
+          render([...rows].sort((a,b) => -(cmp(a,b,'profit'))));
         </script>
         ''', height=680)
 
