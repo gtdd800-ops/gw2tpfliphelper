@@ -76,7 +76,7 @@ I18N = {
 
     "Prix (or)": {"en": "Price (gold)", "de": "Preis (Gold)", "es": "Precio (oro)"},
     "Prix d'achat minimum": {"en": "Min buy price", "de": "Min. Kaufpreis", "es": "Precio de compra mín"},
-    "Prix d'achat maximum (0 = illimité)": {"en": "Max buy price (0 = unlimited)", "de": "Max. Kaufpreis (0 = unbegrenzt)", "es": "Precio de venta máx (0 = ilimitado)"},
+    "Prix d'achat maximum (0 = illimité)": {"en": "Max buy price (0 = unlimited)", "de": "Max. Kaufpreis (0 = unbegrenzt)", "es": "Precio de compra máx (0 = ilimitado)"},
     "Prix de vente min (net)": {"en": "Min sell price (net)", "de": "Min. Verkaufspreis (netto)", "es": "Precio de venta mín (neto)"},
     "Prix de vente max (net, 0 = illimité)": {"en": "Max sell price (net, 0 = unlimited)", "de": "Max. Verkaufspreis (netto, 0 = unbegrenzt)", "es": "Precio de venta máx (neto, 0 = ilimitado)"},
 
@@ -157,12 +157,6 @@ I18N = {
 
     # CSV
     "Télécharger CSV (résultats filtrés)": {"en": "Download CSV (filtered results)", "de": "CSV herunterladen (gefilterte Ergebnisse)", "es": "Descargar CSV (resultados filtrados)"},
-    # >>> NEW <<<
-    "Télécharger CSV — Liste de courses optimisée (max 1000 unités)": {
-        "en": "Download CSV — Optimized shopping list (max 1000 units)",
-        "de": "CSV herunterladen — Optimierte Einkaufsliste (max. 1000 Einheiten)",
-        "es": "Descargar CSV — Lista de compras optimizada (máx. 1000 unidades)",
-    },
 
     # -------- Ajouts OPTI --------
     "Optimisation d'achat": {"en":"Buy optimization", "de":"Kaufoptimierung", "es":"Optimización de compra"},
@@ -429,7 +423,7 @@ def build_flips_df(df_bulk: pd.DataFrame, id2name: dict):
     df["Prix Vente Net (PO)"] = (df["Prix Vente Net (c)"] / 10000.0).round(2)
     df["Profit Net (PO)"] = (df["Profit Net (c)"] / 10000.0).round(2)
 
-    # --- ROI robuste ---
+    # --- ROI robuste (évite divisions par ~0, inf et NaN) ---
     buy_po = df["Prix Achat (PO)"].replace(0, np.nan)
     df["ROI (%)"] = ((df["Profit Net (PO)"] / buy_po) * 100) \
         .replace([np.inf, -np.inf], np.nan).fillna(0).round(2)
@@ -462,7 +456,6 @@ def add_risk_score(df, risk_level):
 
 # ============================= RUN =============================
 bulk, df_all = get_bulk_and_df()
-df_all_raw = df_all.copy()  # >>> NEW <<< base non filtrée pour la liste de courses
 
 # Enregistrement snapshot si historique activé
 if show_history:
@@ -483,19 +476,27 @@ df_all = df_all[mask].reset_index(drop=True)
 
 # --- Nettoyage / Outliers (après filtrage de base, avant score/tri) ---
 if not df_all.empty:
+    # 1) Ignorer les achats quasi nuls (en cuivre)
     df_all = df_all[df_all["Prix Achat (c)"].fillna(0) >= int(min_buy_copper_filter)]
+
+    # 2) Retirer profits impossibles (vente nette <= achat)
     df_all = df_all[df_all["Prix Vente Net (c)"] > df_all["Prix Achat (c)"]]
+
+    # 3) Option: exclure ROI négatifs
     if exclude_neg_roi:
         df_all = df_all[df_all["ROI (%)"] >= 0]
+
+    # 4) Plafonner / couper les ROI excessifs
     if roi_cap_manual > 0:
         df_all = df_all[df_all["ROI (%)"] <= roi_cap_manual]
     else:
         roi_series = df_all["ROI (%)"].astype(float)
-        q1, q3 = roi_series.quantile(0.25), roi_series.quantile(0.75)
-        iqr = (q3 - q1) if pd.notna(q3) and pd.notna(q1) else 0.0
-        if iqr > 0:
-            max_auto = q3 + 1.5 * iqr
-            df_all = df_all[roi_series <= max_auto]
+        if outlier_choice_fr.startswith("IQR"):
+            q1, q3 = roi_series.quantile(0.25), roi_series.quantile(0.75)
+            iqr = (q3 - q1) if pd.notna(q3) and pd.notna(q1) else 0.0
+            if iqr > 0:
+                max_auto = q3 + 1.5 * iqr
+                df_all = df_all[roi_series <= max_auto]
         else:
             p995 = roi_series.quantile(0.995)
             if pd.notna(p995):
@@ -526,6 +527,7 @@ def compute_optimal_qty(row, budget_gold, horizon_sell_h, safety_pct, show_histo
     supply = int(row["Supply"]) if pd.notna(row["Supply"]) else 0
     demand = int(row["Demand"]) if pd.notna(row["Demand"]) else 0
 
+    # Capacité budget (0 = illimité)
     if budget_gold and budget_gold > 0:
         budget_c = int(round(budget_gold * 10000))
         cap_budget = budget_c // buy_c
@@ -533,12 +535,14 @@ def compute_optimal_qty(row, budget_gold, horizon_sell_h, safety_pct, show_histo
         cap_budget = 10**9
     cap_budget = max(0, cap_budget)
 
+    # Capacité de revente
     if show_history_flag and "Vendu période" in row and hist_hours > 0:
         sold_rate_per_h = max(0.0, float(row["Vendu période"])) / float(hist_hours)
         sell_capacity = int(sold_rate_per_h * float(horizon_sell_h))
     else:
         sell_capacity = int(demand)
 
+    # Marge de sécurité
     sell_capacity = int(sell_capacity * (max(10, min(100, safety_pct)) / 100.0))
 
     qty = max(0, min(supply, sell_capacity, cap_budget))
@@ -554,79 +558,6 @@ if not df_all.empty:
     df_all["Profit net optimisé (c)"] = popts_c
     df_all["Profit net optimisé (PO)"] = (df_all["Profit net optimisé (c)"] / 10000.0).round(2)
     df_all["Profit net optimisé (gsc)"] = df_all["Profit net optimisé (c)"].fillna(0).astype(int).apply(gsc_emoji_from_copper)
-
-# >>> NEW <<< -----------------------------------------------------------------
-# Liste de courses optimisée indépendante des paramètres UI (max_units=1000)
-def generate_optimal_shopping_df(df_source: pd.DataFrame, max_units: int = 1000) -> pd.DataFrame:
-    if df_source is None or df_source.empty:
-        return pd.DataFrame(columns=[
-            "Nom","ID","Qté à acheter","Profit unitaire (PO)","Profit total (PO)",
-            "ROI (%)","Prix Achat (PO)","Prix Vente Net (PO)","Supply","Demand","ChatCode"
-        ])
-    df = df_source.copy()
-
-    # Nettoyage minimal et outliers auto (indépendant des contrôles UI)
-    df = df[df["Prix Achat (c)"].fillna(0) >= 10]
-    df = df[df["Prix Vente Net (c)"] > df["Prix Achat (c)"]]
-    df = df[df["Profit Net (c)"] > 0]
-    roi_series = df["ROI (%)"].astype(float)
-    q1, q3 = roi_series.quantile(0.25), roi_series.quantile(0.75)
-    iqr = (q3 - q1) if pd.notna(q3) and pd.notna(q1) else 0.0
-    if iqr > 0:
-        max_auto = q3 + 1.5 * iqr
-        df = df[roi_series <= max_auto]
-    else:
-        p995 = roi_series.quantile(0.995)
-        if pd.notna(p995):
-            df = df[roi_series <= p995]
-
-    # Capacité "immédiate" = min(supply, demand)
-    df["q_avail"] = df[["Supply","Demand"]].min(axis=1).fillna(0).astype(int)
-    df = df[df["q_avail"] > 0]
-
-    # Tri par profit unitaire décroissant (contrainte = nb d'unités total)
-    df = df.sort_values("Profit Net (c)", ascending=False)
-
-    units_left = int(max(0, max_units))
-    picks = []
-    for _, r in df.iterrows():
-        if units_left <= 0:
-            break
-        qty = int(min(int(r["q_avail"]), units_left))
-        if qty <= 0:
-            continue
-        profit_unit_po = float(r["Profit Net (PO)"]) if pd.notna(r["Profit Net (PO)"]) else 0.0
-        total_profit_po = round(qty * profit_unit_po, 2)
-        picks.append({
-            "Nom": r["Nom"],
-            "ID": int(r["ID"]),
-            "Qté à acheter": qty,
-            "Profit unitaire (PO)": round(profit_unit_po, 2),
-            "Profit total (PO)": total_profit_po,
-            "ROI (%)": float(r["ROI (%)"]),
-            "Prix Achat (PO)": float(r["Prix Achat (PO)"]),
-            "Prix Vente Net (PO)": float(r["Prix Vente Net (PO)"]),
-            "Supply": int(r["Supply"]),
-            "Demand": int(r["Demand"]),
-            "ChatCode": make_item_chat_code(int(r["ID"]), min(qty, 255)),
-        })
-        units_left -= qty
-
-    cols = ["Nom","ID","Qté à acheter","Profit unitaire (PO)","Profit total (PO)",
-            "ROI (%)","Prix Achat (PO)","Prix Vente Net (PO)","Supply","Demand","ChatCode"]
-    return pd.DataFrame(picks, columns=cols)
-
-# Génération immédiate + bouton de téléchargement (toujours visible)
-opt_df_1000 = generate_optimal_shopping_df(df_all_raw, max_units=1000)
-st.download_button(
-    T("Télécharger CSV — Liste de courses optimisée (max 1000 unités)"),
-    data=opt_df_1000.to_csv(index=False),
-    file_name="shopping_list_opt_1000.csv",
-    mime="text/csv",
-    key="download_csv_opt_1000",
-    disabled=opt_df_1000.empty
-)
-# ---------------------------------------------------------------------------
 
 # ---------- Display ----------
 if df_all.empty:
@@ -701,6 +632,7 @@ else:
           .gsc-scroller {{ max-height: 620px; overflow-y: auto; }}
           .gsc-head, .gsc-row {{
             display:grid;
+            /* 13 colonnes */
             grid-template-columns: 1.5fr 0.9fr 0.7fr 1.0fr 1.0fr 0.9fr 0.8fr 0.8fr 0.9fr 1.1fr 0.7fr 1.2fr 0.8fr;
             gap:8px; align-items:center;
           }}
@@ -739,11 +671,105 @@ else:
           </div>
         </div>
 
-        <script>/* ... (inchangé) ... */</script>
+        <script>
+          const rows = {items_json2};
+          const K = {keys_json};
+          const list = document.getElementById('gsc-list');
+          const head = document.getElementById('gsc-head');
+          const arrows = {{
+            name: document.getElementById('arr-name'),
+            profit: document.getElementById('arr-profit'),
+            roi: document.getElementById('arr-roi'),
+            buy: document.getElementById('arr-buy'),
+            sell: document.getElementById('arr-sell'),
+            qmin: document.getElementById('arr-qmin'),
+            supply: document.getElementById('arr-supply'),
+            demand: document.getElementById('arr-demand'),
+            qopt: document.getElementById('arr-qopt'),
+            popt: document.getElementById('arr-popt'),
+            id: document.getElementById('arr-id'),
+          }};
+          let sortKey = 'popt';
+          let sortDir = 'desc';
+
+          function copyText(txt, el) {{
+            if (navigator.clipboard) navigator.clipboard.writeText(txt);
+            el.classList.add('ok'); setTimeout(()=>el.classList.remove('ok'), 700);
+          }}
+
+          function render(data) {{
+            list.innerHTML = '';
+            data.forEach(r => {{
+              const row = document.createElement('div'); row.className = 'gsc-row';
+              const c = (txt, cls='') => {{ const d=document.createElement('div'); d.className = cls; d.textContent = txt; return d; }};
+              const code = document.createElement('code'); code.className = 'gsc-code'; code.textContent = r[K.CODE];
+              code.title = 'Click to copy'; code.onclick = () => copyText(r[K.CODE], code);
+              const btn = document.createElement('button'); btn.className='gsc-btn'; btn.textContent = K.COPY;
+              btn.onclick = () => copyText(r[K.CODE], code);
+
+              row.appendChild(c(r[K.NAME], 'gsc-title'));
+              row.appendChild(c(r[K.PROFIT]));
+              row.appendChild(c(r[K.ROI]));
+              row.appendChild(c(r[K.BUY]));
+              row.appendChild(c(r[K.SELL]));
+              row.appendChild(c(String(r[K.QMIN])));
+              row.appendChild(c(String(r[K.SUP])));
+              row.appendChild(c(String(r[K.DEM])));
+              row.appendChild(c(String(r[K.QOPT])));
+              row.appendChild(c(r[K.POPT]));
+              row.appendChild(c(String(r[K.ID])));
+              row.appendChild(code);
+              row.appendChild(btn);
+              list.appendChild(row);
+            }});
+          }}
+
+          function cmp(a, b, key) {{
+            if (key === 'name') return (a[K.NAME] || '').localeCompare(b[K.NAME] || '', undefined, {{sensitivity:'base'}});
+            if (key === 'profit') return (a._profit_c||0) - (b._profit_c||0);
+            if (key === 'buy')    return (a._buy_c||0)    - (b._buy_c||0);
+            if (key === 'sell')   return (a._sell_c||0)   - (b._sell_c||0);
+            if (key === 'roi')    return (a._roi||0)      - (b._roi||0);
+            if (key === 'qmin')   return (a._qmin||0)     - (b._qmin||0);
+            if (key === 'supply') return (a._supply||0)   - (b._supply||0);
+            if (key === 'demand') return (a._demand||0)   - (b._demand||0);
+            if (key === 'qopt')   return (a._qopt||0)     - (b._qopt||0);
+            if (key === 'popt')   return (a._popt_c||0)   - (b._popt_c||0);
+            if (key === 'id')     return (a._id||0)       - (b._id||0);
+            return 0;
+          }}
+
+          function updateArrows() {{
+            Object.values(arrows).forEach(el => el.textContent = '');
+            const arrow = sortDir === 'asc' ? '↑' : '↓';
+            arrows[sortKey].textContent = arrow;
+          }}
+
+          function doSort(key) {{
+            if (sortKey === key) {{
+              sortDir = (sortDir === 'asc') ? 'desc' : 'asc';
+            }} else {{
+              sortKey = key;
+              sortDir = (key === 'name') ? 'asc' : 'desc';
+            }}
+            const data = [...rows].sort((a,b) => {{
+              const v = cmp(a,b,sortKey);
+              return sortDir === 'asc' ? v : -v;
+            }});
+            updateArrows();
+            render(data);
+          }}
+
+          head.querySelectorAll('button[data-key]').forEach(btn => {{
+            btn.addEventListener('click', () => doSort(btn.dataset.key));
+          }});
+
+          updateArrows();
+          render([...rows].sort((a,b) => -(cmp(a,b,sortKey))));
+        </script>
         ''', height=680)
 
     # ----- CSV (haut) -----
-    # (conserve le bouton "résultats filtrés" ; la liste de courses optimisée est déjà plus haut et indépendante)
     st.download_button(T("Télécharger CSV (résultats filtrés)"),
         data=df_all.to_csv(index=False), file_name="flips_gw2tp.csv",
         mime="text/csv", key="download_csv_top")
@@ -778,14 +804,202 @@ else:
     # ====== TABLEAU TOP 20 (triable) ======
     if chart_metric_fr == "Profit Net (PO)":
         top20_tbl = df_all.sort_values("Profit Net (PO)", ascending=False).head(20)
-        default_sort_key = "profit"
+        default_sort_key = "profit"   # tri initial sur profit
         initial_key = "profit"
     else:
         top20_tbl = df_all.sort_values("Score", ascending=False).head(20)
-        default_sort_key = "popt"
-        initial_key = "popt"
+        default_sort_key = "popt"     # plus parlant à l'achat
+        initial_key = "popt"          # on peut mettre "score" si tu veux le score strict
 
-    # ... (tableau Top 20 et CSV bas inchangés) ...
+    view_gsc_top = top20_tbl[[
+        "Nom","Profit Net (gsc)","ROI (%)","Prix Achat (gsc)","Prix Vente Net (gsc)",
+        "Quantité (min)","Supply","Demand","Qté optimisée","Profit net optimisé (gsc)","ID","ChatCode"
+    ]].rename(columns={
+        "Nom": T("Nom"),
+        "Profit Net (gsc)": T("Profit Net"),
+        "ROI (%)": T("ROI (%)"),
+        "Prix Achat (gsc)": T("Prix Achat"),
+        "Prix Vente Net (gsc)": T("Vente nette (85%)"),
+        "Quantité (min)": T("Quantité (min)"),
+        "Supply": T("Supply"),
+        "Demand": T("Demand"),
+        "Qté optimisée": T("Qté optimisée"),
+        "Profit net optimisé (gsc)": T("Profit net optimisé"),
+        "ID": T("ID"),
+        "ChatCode": T("ChatCode"),
+    })
+
+    view_raw_top = top20_tbl[[
+        "Profit Net (c)","Prix Achat (c)","Prix Vente Net (c)","ROI (%)",
+        "Quantité (min)","Supply","Demand","Qté optimisée","Profit net optimisé (c)","ID","Score"
+    ]]
+
+    records_top = []
+    for disp_row, raw_row in zip(view_gsc_top.to_dict("records"), view_raw_top.to_dict("records")):
+        rec = dict(disp_row)
+        rec["_profit_c"] = int(raw_row["Profit Net (c)"]) if pd.notna(raw_row["Profit Net (c)"]) else 0
+        rec["_buy_c"]    = int(raw_row["Prix Achat (c)"]) if pd.notna(raw_row["Prix Achat (c)"]) else 0
+        rec["_sell_c"]   = int(raw_row["Prix Vente Net (c)"]) if pd.notna(raw_row["Prix Vente Net (c)"]) else 0
+        rec["_roi"]      = float(raw_row["ROI (%)"]) if pd.notna(raw_row["ROI (%)"]) else 0.0
+        rec["_qmin"]     = int(raw_row["Quantité (min)"]) if pd.notna(raw_row["Quantité (min)"]) else 0
+        rec["_supply"]   = int(raw_row["Supply"]) if pd.notna(raw_row["Supply"]) else 0
+        rec["_demand"]   = int(raw_row["Demand"]) if pd.notna(raw_row["Demand"]) else 0
+        rec["_qopt"]     = int(raw_row["Qté optimisée"]) if pd.notna(raw_row["Qté optimisée"]) else 0
+        rec["_popt_c"]   = int(raw_row["Profit net optimisé (c)"]) if pd.notna(raw_row["Profit net optimisé (c)"]) else 0
+        rec["_id"]       = int(raw_row["ID"]) if pd.notna(raw_row["ID"]) else 0
+        rec["_score"]    = float(raw_row["Score"]) if pd.notna(raw_row["Score"]) else 0.0
+        records_top.append(rec)
+
+    items_json_top20 = json.dumps(records_top, ensure_ascii=True)
+    # réutilise keys_json (déjà défini plus haut)
+
+    st.subheader(T("Top 20 par ") + (T("Profit Net (PO)") if chart_metric_fr == "Profit Net (PO)" else T("Score (profil de risque)")) + " — " + T("tableau"))
+    components.html(f'''
+    <style>
+      .t20-frame {{ font-family: system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif; border:1px solid #e5e7eb;border-radius:10px;overflow:hidden; margin-top:6px; }}
+      .t20-scroller {{ max-height: 520px; overflow-y: auto; }}
+      .t20-head, .t20-row {{
+        display:grid;
+        grid-template-columns: 1.5fr 0.9fr 0.7fr 1.0fr 1.0fr 0.9fr 0.8fr 0.8fr 0.9fr 1.1fr 0.7fr 1.2fr 0.8fr;
+        gap:8px; align-items:center;
+      }}
+      .t20-head {{ position: sticky; top: 0; z-index: 5; background:#f8fafc; padding:10px 12px; font-weight:600; border-bottom:1px solid #eef2f7 }}
+      .t20-head button {{ all:unset; cursor:pointer; display:flex; align-items:center; gap:6px; }}
+      .t20-head .arrow {{ font-size:12px; color:#6b7280 }}
+      .t20-row {{ padding:10px 12px; border-bottom:1px dashed #eef2f7; background:#fff }}
+      .t20-row:nth-child(odd) {{ background:#fcfcfd }}
+      .t20-row:last-child {{ border-bottom:none }}
+      .t20-code {{ cursor:pointer;background:#f3f4f6;padding:3px 6px;border-radius:6px; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; white-space:nowrap; overflow:hidden; text-overflow:ellipsis }}
+      .t20-code.ok {{ background:#dcfce7 }}
+      .t20-btn {{ padding:6px 10px;border-radius:8px;border:1px solid #d1d5db;background:#fff;cursor:pointer;white-space:nowrap }}
+      .t20-btn:hover {{ background:#f9fafb }}
+      .t20-title {{ white-space:nowrap; overflow:hidden; text-overflow:ellipsis }}
+    </style>
+
+    <div class="t20-frame">
+      <div class="t20-scroller" id="t20-scroll">
+        <div class="t20-head" id="t20-head">
+          <button data-key="name"><span>{T("Nom")}</span><span class="arrow" id="t20-arr-name"></span></button>
+          <button data-key="profit"><span>{T("Profit Net")}</span><span class="arrow" id="t20-arr-profit"></span></button>
+          <button data-key="roi"><span>{T("ROI (%)")}</span><span class="arrow" id="t20-arr-roi"></span></button>
+          <button data-key="buy"><span>{T("Prix Achat")}</span><span class="arrow" id="t20-arr-buy"></span></button>
+          <button data-key="sell"><span>{T("Vente nette (85%)")}</span><span class="arrow" id="t20-arr-sell"></span></button>
+          <button data-key="qmin"><span>{T("Quantité (min)")}</span><span class="arrow" id="t20-arr-qmin"></span></button>
+          <button data-key="supply"><span>{T("Supply")}</span><span class="arrow" id="t20-arr-supply"></span></button>
+          <button data-key="demand"><span>{T("Demand")}</span><span class="arrow" id="t20-arr-demand"></span></button>
+          <button data-key="qopt"><span>{T("Qté optimisée")}</span><span class="arrow" id="t20-arr-qopt"></span></button>
+          <button data-key="popt"><span>{T("Profit net optimisé")}</span><span class="arrow" id="t20-arr-popt"></span></button>
+          <button data-key="id"><span>{T("ID")}</span><span class="arrow" id="t20-arr-id"></span></button>
+          <div>{T("ChatCode")}</div>
+          <div>{T("Copier")}</div>
+        </div>
+        <div id="t20-list"></div>
+      </div>
+    </div>
+
+    <script>
+      const rows2 = {items_json_top20};
+      const K2 = {keys_json};
+      const list2 = document.getElementById('t20-list');
+      const head2 = document.getElementById('t20-head');
+      const arrows2 = {{
+        name: document.getElementById('t20-arr-name'),
+        profit: document.getElementById('t20-arr-profit'),
+        roi: document.getElementById('t20-arr-roi'),
+        buy: document.getElementById('t20-arr-buy'),
+        sell: document.getElementById('t20-arr-sell'),
+        qmin: document.getElementById('t20-arr-qmin'),
+        supply: document.getElementById('t20-arr-supply'),
+        demand: document.getElementById('t20-arr-demand'),
+        qopt: document.getElementById('t20-arr-qopt'),
+        popt: document.getElementById('t20-arr-popt'),
+        id: document.getElementById('t20-arr-id'),
+      }};
+      let sortKey2 = "{default_sort_key}";
+      let sortDir2 = (sortKey2 === 'name') ? 'asc' : 'desc';
+
+      function copyText2(txt, el) {{
+        if (navigator.clipboard) navigator.clipboard.writeText(txt);
+        el.classList.add('ok'); setTimeout(()=>el.classList.remove('ok'), 700);
+      }}
+
+      function render2(data) {{
+        list2.innerHTML = '';
+        data.forEach(r => {{
+          const row = document.createElement('div'); row.className = 't20-row';
+          const c = (txt, cls='') => {{ const d=document.createElement('div'); d.className = cls; d.textContent = txt; return d; }};
+          const code = document.createElement('code'); code.className = 't20-code'; code.textContent = r[K2.CODE];
+          code.title = 'Click to copy'; code.onclick = () => copyText2(r[K2.CODE], code);
+          const btn = document.createElement('button'); btn.className='t20-btn'; btn.textContent = K2.COPY;
+          btn.onclick = () => copyText2(r[K2.CODE], code);
+
+          row.appendChild(c(r[K2.NAME], 't20-title'));
+          row.appendChild(c(r[K2.PROFIT]));
+          row.appendChild(c(r[K2.ROI]));
+          row.appendChild(c(r[K2.BUY]));
+          row.appendChild(c(r[K2.SELL]));
+          row.appendChild(c(String(r[K2.QMIN])));
+          row.appendChild(c(String(r[K2.SUP])));
+          row.appendChild(c(String(r[K2.DEM])));
+          row.appendChild(c(String(r[K2.QOPT])));
+          row.appendChild(c(r[K2.POPT]));
+          row.appendChild(c(String(r[K2.ID])));
+          row.appendChild(code);
+          row.appendChild(btn);
+          list2.appendChild(row);
+        }});
+      }}
+
+      function cmp2(a, b, key) {{
+        if (key === 'name') return (a[K2.NAME] || '').localeCompare(b[K2.NAME] || '', undefined, {{sensitivity:'base'}});
+        if (key === 'profit') return (a._profit_c||0) - (b._profit_c||0);
+        if (key === 'buy')    return (a._buy_c||0)    - (b._buy_c||0);
+        if (key === 'sell')   return (a._sell_c||0)   - (b._sell_c||0);
+        if (key === 'roi')    return (a._roi||0)      - (b._roi||0);
+        if (key === 'qmin')   return (a._qmin||0)     - (b._qmin||0);
+        if (key === 'supply') return (a._supply||0)   - (b._supply||0);
+        if (key === 'demand') return (a._demand||0)   - (b._demand||0);
+        if (key === 'qopt')   return (a._qopt||0)     - (b._qopt||0);
+        if (key === 'popt')   return (a._popt_c||0)   - (b._popt_c||0);
+        if (key === 'id')     return (a._id||0)       - (b._id||0);
+        if (key === 'score')  return (a._score||0)    - (b._score||0);
+        return 0;
+      }}
+
+      function updateArrows2() {{
+        Object.values(arrows2).forEach(el => el.textContent = '');
+        const arrow = sortDir2 === 'asc' ? '↑' : '↓';
+        if (arrows2[sortKey2]) arrows2[sortKey2].textContent = arrow;
+      }}
+
+      function doSort2(key) {{
+        if (sortKey2 === key) {{
+          sortDir2 = (sortDir2 === 'asc') ? 'desc' : 'asc';
+        }} else {{
+          sortKey2 = key;
+          sortDir2 = (key === 'name') ? 'asc' : 'desc';
+        }}
+        const data = [...rows2].sort((a,b) => {{
+          const v = cmp2(a,b,sortKey2);
+          return sortDir2 === 'asc' ? v : -v;
+        }});
+        updateArrows2();
+        render2(data);
+      }}
+
+      head2.querySelectorAll('button[data-key]').forEach(btn => {{
+        btn.addEventListener('click', () => doSort2(btn.dataset.key));
+      }});
+
+      // Tri initial selon la métrique choisie
+      updateArrows2();
+      const initial2 = [...rows2].sort((a,b) => {{
+        const v = cmp2(a,b, "{initial_key}");
+        return sortDir2 === 'asc' ? v : -v;
+      }});
+      render2(initial2);
+    </script>
+    ''', height=600)
 
     # ----- CSV (bas) -----
     st.download_button(T("Télécharger CSV (résultats filtrés)"),
@@ -793,4 +1007,40 @@ else:
         mime="text/csv", key="download_csv_bottom")
 
     # ====== COURBES HISTORIQUES (si suivi activé) ======
-    # ... (inchangé) ...
+    if show_history:
+        st.subheader(T("Évolution Offre / Demande sur la période"))
+        options = df_all[["ID","Nom"]].copy()
+        if options.empty:
+            st.info(T("Aucun item à tracer."))
+        else:
+            options["label"] = options.apply(lambda r: f"{r['Nom']} (ID {r['ID']})", axis=1)
+            choice = st.selectbox(T("Choisir un objet"), options["label"].tolist())
+            try:
+                chosen_id = int(choice.rsplit("ID", 1)[1].strip(" )"))
+            except Exception:
+                chosen_id = int(options["ID"].iloc[0])
+
+            ts_df = fetch_timeseries_for_id(chosen_id, hist_hours)
+            if ts_df.empty or len(ts_df) < 2:
+                st.info(T("Pas encore assez d'historique pour tracer (laisse l'app tourner)."))
+            else:
+                fig, ax = plt.subplots(figsize=(11, 4))
+                supply_series = ts_df["supply"].replace(0, np.nan)
+                demand_series = ts_df["demand"].replace(0, np.nan)
+                ax.plot(ts_df["dt"], supply_series, label=T("Supply"))
+                ax.plot(ts_df["dt"], demand_series, label=T("Demand"))
+                ax.set_xlabel(T("Temps")); ax.set_ylabel(T("Quantités"))
+                ax.set_title(f"{T('Offre / Demande — ')}{choice}"); ax.legend()
+                if log_scale_od: ax.set_yscale("log")
+                st.pyplot(fig, clear_figure=True)
+
+                st.subheader(T("Évolution des prix (ultra clean)"))
+                price_df = ts_df.copy()
+                price_df["buy_po"] = (price_df["buy"] / 100.0).round(2)
+                price_df["sell_net_po"] = (price_df["sell"] * 0.85 / 100.0).round(2)
+                fig2, ax2 = plt.subplots(figsize=(11, 4))
+                ax2.plot(price_df["dt"], price_df["buy_po"], label=T("Achat (PO)"))
+                ax2.plot(price_df["dt"], price_df["sell_net_po"], label=T("Vente nette 85% (PO)"))
+                ax2.set_xlabel(T("Temps")); ax2.set_ylabel(T("Prix (g)"))
+                ax2.set_title(f"{T('Prix — ')}{choice}"); ax2.legend()
+                st.pyplot(fig2, clear_figure=True)
