@@ -1,9 +1,9 @@
 # -*- coding: utf-8 -*-
-# GW2TP Flips — v5 (GW2 Official API version)
+# GW2TP Flips — v5
 # UI simplifiée + ROI robuste + Watchlist + Profit/heure + Rotation rapide + Alertes locales
 # + Optimisation panier (budget) + Export watchlist (CSV/JSON) + Heatmap ROI/Profit
 # 4 langues (FR/EN/DE/ES) — Sélecteur par drapeaux
-# Exécution : streamlit run gw2tp_v5_gw2api.py
+# Exécution : streamlit run gw2tp_v5.py
 
 import base64, struct, json, sqlite3, time, io
 from typing import Dict, List, Tuple
@@ -20,11 +20,8 @@ from requests.adapters import HTTPAdapter
 # ========================= Constantes =========================
 TP_NET = 0.85
 TIMEOUT = (5, 20)
-
-# --- API officielle GW2 ---
-GW2_API_PRICES_ALL = "https://api.guildwars2.com/v2/commerce/prices?ids=all"
-GW2_API_ITEMS      = "https://api.guildwars2.com/v2/items"
-
+GW2TP_BULK_ITEMS = "https://api.gw2tp.com/1/bulk/items.json"
+GW2TP_BULK_NAMES = "https://api.gw2tp.com/1/bulk/items-names.json"
 DB_PATH = "gw2tp_history.sqlite"
 SNAPSHOT_BUCKET_SECONDS = 5 * 60
 
@@ -34,7 +31,7 @@ LANG_FLAGS = {"fr":"🇫🇷","en":"🇬🇧","de":"🇩🇪","es":"🇪🇸"}
 
 I18N = {
     # titres / en-têtes
-    "title": {"fr": "Flips Trading Post (source: GW2 API)", "en": "Trading Post Flips (source: GW2 API)", "de": "Trading-Post-Flips (Quelle: GW2 API)", "es": "Flips del Trading Post (fuente: GW2 API)"},
+    "title": {"fr": "Flips Trading Post (source: GW2TP)", "en": "Trading Post Flips (source: GW2TP)", "de": "Trading-Post-Flips (Quelle: GW2TP)", "es": "Flips del Trading Post (fuente: GW2TP)"},
     "byline": {"fr": "🔨 escarbeille.4281 · 💬 Discord: escarmouche", "en": "🔨 escarbeille.4281 · 💬 Discord: escarmouche", "de": "🔨 escarbeille.4281 · 💬 Discord: escarmouche", "es": "🔨 escarbeille.4281 · 💬 Discord: escarmouche"},
     "last_update": {"fr":"Dernière mise à jour : ","en":"Last update: ","de":"Letztes Update: ","es":"Última actualización: "},
     "tab_flips": {"fr":"Flips","en":"Flips","de":"Flips","es":"Flips"},
@@ -67,7 +64,7 @@ I18N = {
     "max_profit": {"fr":"Profit net max (g, 0 = ∞)","en":"Max net profit (g, 0 = ∞)","de":"Max. Nettogewinn (g, 0 = ∞)","es":"Beneficio neto máx (o, 0 = ∞)"},
     "min_buy_g": {"fr":"Prix d'achat min (g)","en":"Min buy (g)","de":"Min. Kauf (g)","es":"Compra mín (o)"},
     "max_buy_g": {"fr":"Prix d'achat max (g, 0 = ∞)","en":"Max buy (g, 0 = ∞)","de":"Max. Kauf (g, 0 = ∞)","es":"Compra máx (o, 0 = ∞)"},
-    "min_buy_c": {"fr":"Achat min (cuivre) pris en compte","en":"Min buy (copper) to consider","de":"Min. Kauf (Kupfer) berücksichtig.","es":"Compra mín (cobre) a considerar"},
+    "min_buy_c": {"fr":"Achat min (cuivre) pris en compte","en":"Min buy (copper) to consider","de":"Min. Kauf (Kupfer) berücksicht.","es":"Compra mín (cobre) a considerar"},
     "cap_roi": {"fr":"Cap ROI (%) (0 = auto 1000)","en":"Cap ROI (%) (0 = auto 1000)","de":"ROI-Limit (%) (0 = auto 1000)","es":"Tope ROI (%) (0 = auto 1000)"},
 
     # histoire & opti
@@ -190,7 +187,7 @@ def make_session() -> requests.Session:
     s.headers.update({
         "Accept": "application/json",
         "Accept-Encoding": "gzip, deflate, br, zstd",
-        "User-Agent": "GW2TP-Flips/5.0 (GW2 Official API)"
+        "User-Agent": "GW2TP-Flips/5.0"
     })
     retry = Retry(total=5, backoff_factor=0.5, status_forcelist=(429,500,502,503,504), allowed_methods=frozenset(["GET"]))
     adapter = HTTPAdapter(max_retries=retry, pool_connections=10, pool_maxsize=10)
@@ -241,84 +238,28 @@ def gsc_emoji_from_copper(c: int) -> str:
     parts.append(f"{cc}{EMO_C}")
     return sign + " ".join(parts)
 
-# ---- Langue GW2 ----
-def _gw2_lang(code: str) -> str:
-    return {"fr":"fr","en":"en","de":"de","es":"es"}.get((code or "fr").lower(), "fr")
-
-# ========================= Fetch (GW2 OFFICIAL API) =========================
 @st.cache_data(ttl=300, show_spinner=False)
 def fetch_bulk_items() -> pd.DataFrame:
-    """
-    Récupère tous les items ayant un prix au TP via l'API officielle
-    et les mappe au format attendu par le reste du pipeline :
-    colonnes: id, buy, sell, supply, demand
-    """
-    r = SESSION.get(GW2_API_PRICES_ALL, timeout=TIMEOUT)
-    if not r.ok:
-        return pd.DataFrame(columns=["id","buy","sell","supply","demand"])
-
-    data = r.json() or []
-    rows = []
-    for p in data:
-        try:
-            iid = int(p.get("id"))
-            buys = p.get("buys") or {}
-            sells = p.get("sells") or {}
-            buy_unit   = int(buys.get("unit_price") or 0)
-            buy_qty    = int(buys.get("quantity")    or 0)
-            sell_unit  = int(sells.get("unit_price") or 0)
-            sell_qty   = int(sells.get("quantity")   or 0)
-            rows.append({
-                "id": iid,
-                "buy": buy_unit,       # meilleur ordre d'achat
-                "sell": sell_unit,     # meilleure offre de vente
-                "supply": sell_qty,    # offre = quantité en vente
-                "demand": buy_qty,     # demande = quantité d'ordres d'achat
-            })
-        except Exception:
-            continue
-
-    return pd.DataFrame(rows, columns=["id","buy","sell","supply","demand"])
+    for url in (GW2TP_BULK_ITEMS, GW2TP_BULK_ITEMS.replace("https://","http://")):
+        r = SESSION.get(url, timeout=TIMEOUT)
+        if r.ok:
+            obj = r.json()
+            return pd.DataFrame(obj.get("items", []), columns=obj.get("columns", []))
+    return pd.DataFrame(columns=["id","buy","sell","supply","demand"])
 
 @st.cache_data(ttl=300, show_spinner=False)
-def fetch_item_names(ids: List[int] = None) -> Dict[int, str]:
-    """
-    Récupère les noms localisés via /v2/items?ids=...&lang=xx
-    On s'appuie sur la liste d'IDs présents dans les prix.
-    """
-    if ids is None or len(ids) == 0:
-        bulk = fetch_bulk_items()
-        ids = bulk["id"].dropna().astype(int).tolist()
-
-    if not ids:
-        return {}
-
-    lang = _gw2_lang(st.session_state.get("lang", "fr"))
-    id2name: Dict[int, str] = {}
-    CHUNK = 200
-
-    for i in range(0, len(ids), CHUNK):
-        subset = ids[i:i+CHUNK]
-        url = f"{GW2_API_ITEMS}?ids={','.join(map(str, subset))}&lang={lang}"
+def fetch_item_names() -> Dict[int, str]:
+    for url in (GW2TP_BULK_NAMES, GW2TP_BULK_NAMES.replace("https://","http://")):
         r = SESSION.get(url, timeout=TIMEOUT)
-        if not r.ok:
-            continue
-        try:
-            for it in r.json() or []:
-                iid = int(it.get("id", 0) or 0)
-                name = it.get("name") or ""
-                if iid and name:
-                    id2name[iid] = name
-        except Exception:
-            continue
-
-    return id2name
+        if r.ok:
+            items = r.json().get("items", [])
+            return {int(x[0]): x[1] for x in items if len(x) >= 2}
+    return {}
 
 @st.cache_data(ttl=300, show_spinner=False)
 def get_bulk_and_df():
     bulk = fetch_bulk_items()
-    ids = bulk["id"].dropna().astype(int).tolist()
-    names = fetch_item_names(ids)
+    names = fetch_item_names()
     df = build_flips_df(bulk, names)
     return bulk, df
 
@@ -374,19 +315,8 @@ PRESET_TO_RISK = {"Prudent": 20, "Équilibré": 50, "Agressif": 80}
 
 
 def add_risk_score(df: pd.DataFrame, risk_level: int) -> pd.DataFrame:
-    # Toujours renvoyer une colonne 'Score' pour éviter les KeyError en cas de DataFrame vide
     if df.empty:
-        return df.assign(Score=pd.Series(dtype=float))
-    w_roi = risk_level / 100.0
-    w_vol = 1 - w_roi
-    roi = df["ROI (%)"].clip(lower=0).fillna(0)
-    vol = np.log10(df["Quantité (min)"].fillna(0) + 1)
-
-    def norm(s):
-        return (s - s.min()) / (s.max() - s.min()) if s.max() > s.min() else s * 0
-    df = df.copy()
-    df["Score"] = (w_roi * norm(roi) + w_vol * norm(vol)).round(3)
-    return df
+        return df
     w_roi = risk_level / 100.0
     w_vol = 1 - w_roi
     roi = df["ROI (%)"].clip(lower=0).fillna(0)
@@ -640,14 +570,7 @@ if enable_history:
 view = add_risk_score(view, risk_level)
 view["Profit/h (est)"] = compute_profit_per_hour(view, hist_hours, safety_pct, enable_history)
 
-# Tri (robuste même si certaines colonnes manquent ou si la vue est vide)
-sort_cols_fast = [c for c in ["Profit/h (est)", "Profit Net (PO)"] if c in view.columns]
-sort_cols_slow = [c for c in ["Score", "Profit Net (PO)"] if c in view.columns]
-if not view.empty:
-    cols = sort_cols_fast if fast_mode else sort_cols_slow
-    if cols:
-        view = view.sort_values(cols, ascending=[False]*len(cols))
-# Fin Tri
+# Tri
 if fast_mode:
     view = view.sort_values(["Profit/h (est)", "Profit Net (PO)"], ascending=[False, False])
 else:
@@ -797,9 +720,7 @@ with TAB3:
 
 with TAB4:
     # À propos — texte exact demandé (non traduit)
-    st.write("GW2TP Flips v5 — GW2 Official API Edition")
+    st.write("GW2TP Flips v3")
     st.write("Open-source friendly. N'hésite pas à modifier/adapter.")
-    st.write("Utilisation de l'API officielle Guild Wars 2: /v2/commerce/prices & /v2/items")
+    st.write("Utilisation de la base de données de gw2tp.com")
     st.caption("🔨 escarbeille.4281 · 💬 Discord: escarmouche")
-
-
