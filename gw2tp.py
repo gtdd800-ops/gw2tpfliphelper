@@ -60,6 +60,15 @@ I18N = {
     "Profit net max (or, 0 = illimité)": {"en": "Max net profit (g, 0 = unlimited)", "de": "Max. Nettogewinn (g, 0 = unbegrenzt)", "es": "Beneficio neto máx (o, 0 = ilimitado)"},
     "ROI min (%)": {"en": "Min ROI (%)", "de": "Min. ROI (%)", "es": "ROI mín (%)"},
 
+    # --- Nettoyage / Outliers (nouveaux libellés) ---
+    "Nettoyage / Outliers": {"en": "Cleaning / Outliers", "de": "Bereinigung / Ausreißer", "es": "Limpieza / Atípicos"},
+    "Ignorer si prix d'achat < (cuivre)": {"en": "Ignore if buy price < (copper)", "de": "Ignoriere, wenn Kaufpreis < (Kupfer)", "es": "Ignorar si precio de compra < (cobre)"},
+    "Exclure ROI négatifs": {"en": "Exclude negative ROI", "de": "Negative ROI ausschließen", "es": "Excluir ROI negativos"},
+    "Seuil ROI max (%) (0 = auto)": {"en": "Max ROI (%) threshold (0 = auto)", "de": "Max. ROI (%) (0 = auto)", "es": "ROI máx (%) (0 = auto)"},
+    "Méthode auto des outliers (si ROI max = 0)": {"en": "Auto outlier method (if ROI max = 0)", "de": "Autom. Ausreißermethode (wenn ROI max = 0)", "es": "Método auto de atípicos (si ROI máx = 0)"},
+    "IQR (1.5×)": {"en": "IQR (1.5×)", "de": "IQR (1,5×)", "es": "IQR (1,5×)"},
+    "Percentile 99.5%": {"en": "99.5th percentile", "de": "99,5. Perzentil", "es": "Percentil 99,5%"},
+
     "Volume": {"en": "Volume", "de": "Volumen", "es": "Volumen"},
     "Quantité min (min(demand, supply))": {"en": "Min quantity (min(demand, supply))", "de": "Mindestmenge (min(Nachfrage, Angebot))", "es": "Cantidad mín (min(demanda, oferta))"},
     "Quantité max (min(demand, supply), 0 = illimité)": {"en": "Max quantity (min(demand, supply), 0 = unlimited)", "de": "Max. Menge (min(Nachfrage, Angebot), 0 = unbegrenzt)", "es": "Cantidad máx (min(demanda, oferta), 0 = ilimitado)"},
@@ -297,6 +306,22 @@ with st.sidebar:
     max_profit = st.number_input(T("Profit net max (or, 0 = illimité)"), 0.0, 1e6, 0.0, 0.5)
     min_roi = st.number_input(T("ROI min (%)"), 0.0, 1000.0, 10.0, 1.0)
 
+    # --- Nettoyage / Outliers ---
+    st.header(T("Nettoyage / Outliers"))
+    min_buy_copper_filter = st.number_input(
+        T("Ignorer si prix d'achat < (cuivre)"), 0, 10_000, 10, 1
+    )
+    exclude_neg_roi = st.checkbox(T("Exclure ROI négatifs"), value=False)
+    roi_cap_manual = st.number_input(T("Seuil ROI max (%) (0 = auto)"), 0.0, 1_000_000.0, 0.0, 10.0)
+
+    outlier_modes_fr = ["IQR (1.5×)", "Percentile 99.5%"]
+    outlier_modes_display = [T(x) for x in outlier_modes_fr]
+    outlier_choice_display = st.selectbox(
+        T("Méthode auto des outliers (si ROI max = 0)"),
+        outlier_modes_display, index=0
+    )
+    outlier_choice_fr = outlier_modes_fr[outlier_modes_display.index(outlier_choice_display)]
+
     st.header(T("Volume"))
     min_quantity_user = st.number_input(T("Quantité min (min(demand, supply))"), 0, 10_000_000, 10, 5)
     max_quantity_user = st.number_input(T("Quantité max (min(demand, supply), 0 = illimité)"), 0, 10_000_000, 0, 5)
@@ -397,7 +422,12 @@ def build_flips_df(df_bulk: pd.DataFrame, id2name: dict):
     df["Prix Achat (PO)"] = (df["Prix Achat (c)"] / 10000.0).round(2)
     df["Prix Vente Net (PO)"] = (df["Prix Vente Net (c)"] / 10000.0).round(2)
     df["Profit Net (PO)"] = (df["Profit Net (c)"] / 10000.0).round(2)
-    df["ROI (%)"] = ((df["Profit Net (PO)"] / df["Prix Achat (PO)"]) * 100).replace([np.inf,-np.inf], np.nan).fillna(0).round(2)
+
+    # --- ROI robuste (évite divisions par ~0, inf et NaN) ---
+    buy_po = df["Prix Achat (PO)"].replace(0, np.nan)
+    df["ROI (%)"] = ((df["Profit Net (PO)"] / buy_po) * 100) \
+        .replace([np.inf, -np.inf], np.nan).fillna(0).round(2)
+
     df["Quantité (min)"] = df[["supply","demand"]].min(axis=1).fillna(0).astype(int)
     df["ChatCode"] = df["id"].apply(lambda x: make_item_chat_code(int(x)))
     df.rename(columns={"id":"ID","supply":"Supply","demand":"Demand"}, inplace=True)
@@ -443,6 +473,34 @@ if min_sell > 0: mask &= df_all["Prix Vente Net (PO)"] >= min_sell
 if max_sell > 0: mask &= df_all["Prix Vente Net (PO)"] <= max_sell
 if name_query: mask &= df_all["Nom"].str.lower().str.contains(name_query.lower(), na=False)
 df_all = df_all[mask].reset_index(drop=True)
+
+# --- Nettoyage / Outliers (après filtrage de base, avant score/tri) ---
+if not df_all.empty:
+    # 1) Ignorer les achats quasi nuls (en cuivre)
+    df_all = df_all[df_all["Prix Achat (c)"].fillna(0) >= int(min_buy_copper_filter)]
+
+    # 2) Retirer profits impossibles (vente nette <= achat)
+    df_all = df_all[df_all["Prix Vente Net (c)"] > df_all["Prix Achat (c)"]]
+
+    # 3) Option: exclure ROI négatifs
+    if exclude_neg_roi:
+        df_all = df_all[df_all["ROI (%)"] >= 0]
+
+    # 4) Plafonner / couper les ROI excessifs
+    if roi_cap_manual > 0:
+        df_all = df_all[df_all["ROI (%)"] <= roi_cap_manual]
+    else:
+        roi_series = df_all["ROI (%)"].astype(float)
+        if outlier_choice_fr.startswith("IQR"):
+            q1, q3 = roi_series.quantile(0.25), roi_series.quantile(0.75)
+            iqr = (q3 - q1) if pd.notna(q3) and pd.notna(q1) else 0.0
+            if iqr > 0:
+                max_auto = q3 + 1.5 * iqr
+                df_all = df_all[roi_series <= max_auto]
+        else:
+            p995 = roi_series.quantile(0.995)
+            if pd.notna(p995):
+                df_all = df_all[roi_series <= p995]
 
 # Historique (ventes cumulées & tendances)
 if show_history and not df_all.empty:
