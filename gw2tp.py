@@ -62,6 +62,11 @@ I18N = {
 
     "Filtres - Profits": {"en": "Filters – Profit", "de": "Filter – Profit", "es": "Filtros – Beneficio"},
     "Profit net min (or)": {"en": "Min net profit (g)", "de": "Min Nettogewinn (g)", "es": "Beneficio neto mín (o)"},
+    "Profit net max (or, 0 = illimité)": {
+        "en": "Max net profit (g, 0 = unlimited)",
+        "de": "Max. Nettogewinn (g, 0 = unbegrenzt)",
+        "es": "Beneficio neto máx (o, 0 = ilimitado)",
+    },
     "ROI min (%)": {"en": "Min ROI (%)", "de": "Min. ROI (%)", "es": "ROI mín (%)"},
 
     "Volume": {"en": "Volume", "de": "Volumen", "es": "Volumen"},
@@ -69,6 +74,11 @@ I18N = {
         "en": "Min quantity (min(demand, supply))",
         "de": "Mindestmenge (min(Nachfrage, Angebot))",
         "es": "Cantidad mín (min(demanda, oferta))",
+    },
+    "Quantité max (min(demand, supply), 0 = illimité)": {
+        "en": "Max quantity (min(demand, supply), 0 = unlimited)",
+        "de": "Max. Menge (min(Nachfrage, Angebot), 0 = unbegrenzt)",
+        "es": "Cantidad máx (min(demanda, oferta), 0 = ilimitado)",
     },
     "Ventes min sur la période": {
         "en": "Min sales over period",
@@ -401,10 +411,12 @@ with st.sidebar:
 
     st.header(T("Filtres - Profits"))
     min_profit = st.number_input(T("Profit net min (or)"), 0.0, 1e6, 1.0, 0.5)
+    max_profit = st.number_input(T("Profit net max (or, 0 = illimité)"), 0.0, 1e6, 0.0, 0.5)
     min_roi = st.number_input(T("ROI min (%)"), 0.0, 1000.0, 10.0, 1.0)
 
     st.header(T("Volume"))
     min_quantity_user = st.number_input(T("Quantité min (min(demand, supply))"), 0, 10_000_000, 10, 5)
+    max_quantity_user = st.number_input(T("Quantité max (min(demand, supply), 0 = illimité)"), 0, 10_000_000, 0, 5)
     min_sold = st.number_input(T("Ventes min sur la période"), 0, 10_000_000, 0, 100)
 
     st.header(T("Prix (or)"))
@@ -558,6 +570,14 @@ if show_history:
 
 # Filtrage principal
 mask = (df_all["Profit Net (PO)"] >= min_profit) & (df_all["ROI (%)"] >= min_roi)
+if max_profit > 0:
+    mask &= df_all["Profit Net (PO)"] <= max_profit
+
+# >>> filtres quantité (min & max) <<<
+mask &= df_all["Quantité (min)"] >= min_quantity_user
+if max_quantity_user > 0:
+    mask &= df_all["Quantité (min)"] <= max_quantity_user
+
 if min_buy > 0: mask &= df_all["Prix Achat (PO)"] >= min_buy
 if max_buy > 0: mask &= df_all["Prix Achat (PO)"] <= max_buy
 if min_sell > 0: mask &= df_all["Prix Vente Net (PO)"] >= min_sell
@@ -587,9 +607,10 @@ if df_all.empty:
 else:
     st.caption(f"{len(df_all):,} {T('objets — période historique : ')}{hist_hours} h{T(' | ΔSupply/Demand : ')}{trend_hours} h")
 
-    # ----- Table lisible g/s/c avec copier ChatCode (remplace le 2e tableau) -----
+    # ----- Table lisible g/s/c avec copier + scroll -----
     st.subheader(T("Affichage prix (g/s/c)"))
     if not df_all.empty:
+        # on garde un cap en haut pour ne pas bourrer le DOM côté client
         max_rows_emo = st.slider(T("Lignes à afficher (prix g/s/c)"), 10, 500, 100, 10)
         view_gsc = df_all.head(max_rows_emo)[[
             "Nom","Profit Net (gsc)","ROI (%)","Prix Achat (gsc)","Prix Vente Net (gsc)",
@@ -607,24 +628,30 @@ else:
             "ChatCode": T("ChatCode"),
         })
 
-        # Rendu HTML interactif avec copies intégrées
         records = view_gsc.to_dict(orient="records")
         items_json2 = json.dumps(records, ensure_ascii=True)
-        comp_height2 = min(1000, 44 * max(1, len(records)) + 160)
 
         components.html(f'''
         <style>
-          .gsc-wrap {{
+          .gsc-frame {{
             font-family: system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;
-            border:1px solid #e5e7eb;border-radius:10px;overflow:hidden
+            border:1px solid #e5e7eb;border-radius:10px;overflow:hidden;
+          }}
+          .gsc-scroller {{
+            max-height: 620px;
+            overflow-y: auto;
           }}
           .gsc-head, .gsc-row {{
             display:grid;
             grid-template-columns: 1.5fr 0.9fr 0.7fr 1.0fr 1.0fr 0.9fr 0.8fr 0.8fr 0.7fr 1.2fr 0.8fr;
             gap:8px; align-items:center;
           }}
-          .gsc-head {{ background:#f8fafc; padding:10px 12px; font-weight:600; border-bottom:1px solid #eef2f7 }}
-          .gsc-row {{ padding:10px 12px; border-bottom:1px dashed #eef2f7 }}
+          .gsc-head {{
+            position: sticky; top: 0; z-index: 5;
+            background:#f8fafc; padding:10px 12px; font-weight:600; border-bottom:1px solid #eef2f7
+          }}
+          .gsc-row {{ padding:10px 12px; border-bottom:1px dashed #eef2f7; background:#fff }}
+          .gsc-row:nth-child(odd) {{ background:#fcfcfd }}
           .gsc-row:last-child {{ border-bottom:none }}
           .gsc-code {{
             cursor:pointer;background:#f3f4f6;padding:3px 6px;border-radius:6px;
@@ -638,21 +665,23 @@ else:
           .gsc-muted {{ color:#6b7280 }}
           .gsc-title {{ white-space:nowrap; overflow:hidden; text-overflow:ellipsis }}
         </style>
-        <div class="gsc-wrap">
-          <div class="gsc-head">
-            <div>{T("Nom")}</div>
-            <div>{T("Profit Net")}</div>
-            <div>{T("ROI (%)")}</div>
-            <div>{T("Prix Achat")}</div>
-            <div>{T("Vente nette (85%)")}</div>
-            <div>{T("Quantité (min)")}</div>
-            <div>{T("Supply")}</div>
-            <div>{T("Demand")}</div>
-            <div>{T("ID")}</div>
-            <div>{T("ChatCode")}</div>
-            <div class="gsc-muted">{T("Copier")}</div>
+        <div class="gsc-frame">
+          <div class="gsc-scroller" id="gsc-scroll">
+            <div class="gsc-head">
+              <div>{T("Nom")}</div>
+              <div>{T("Profit Net")}</div>
+              <div>{T("ROI (%)")}</div>
+              <div>{T("Prix Achat")}</div>
+              <div>{T("Vente nette (85%)")}</div>
+              <div>{T("Quantité (min)")}</div>
+              <div>{T("Supply")}</div>
+              <div>{T("Demand")}</div>
+              <div>{T("ID")}</div>
+              <div>{T("ChatCode")}</div>
+              <div class="gsc-muted">{T("Copier")}</div>
+            </div>
+            <div id="gsc-list"></div>
           </div>
-          <div id="gsc-list"></div>
         </div>
         <script>
           const rows = {items_json2};
@@ -683,7 +712,7 @@ else:
             list.appendChild(row);
           }});
         </script>
-        ''', height=comp_height2)
+        ''', height=680)
 
     # ----- CSV (haut) -----
     st.download_button(T("Télécharger CSV (résultats filtrés)"),
