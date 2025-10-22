@@ -736,13 +736,12 @@ with TAB2:
                 st.pyplot(fig2, clear_figure=True)
 
 with TAB3:
-    st.markdown(f"**{T('TipsTitle')}**
-
-{T('TipLines')}")
+    st.markdown(f"**{T('TipsTitle')}**\n\n{T('TipLines')}")
 
 with TAB4:
     st.write("GW2TP Flips v3")
     st.write("Open-source friendly. N'hésite pas à modifier/adapter.")
     st.write("Utilisation de la base de données de gw2tp.com")
     st.caption("🔨 escarbeille.4281 · 💬 Discord: escarmouche"))
+
 
