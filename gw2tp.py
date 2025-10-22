@@ -742,6 +742,4 @@ with TAB4:
     st.write("GW2TP Flips v3")
     st.write("Open-source friendly. N'hésite pas à modifier/adapter.")
     st.write("Utilisation de la base de données de gw2tp.com")
-    st.caption("🔨 escarbeille.4281 · 💬 Discord: escarmouche"))
-
-
+    st.caption("🔨 escarbeille.4281 · 💬 Discord: escarmouche")
