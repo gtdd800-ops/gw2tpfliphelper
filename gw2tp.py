@@ -133,30 +133,30 @@ I18N = {
 
     # Conseils
     "TipsTitle": {"fr":"Conseils rapides","en":"Quick tips","de":"Schnelle Tipps","es":"Consejos rápidos"},
-    "TipLines": {"fr":"- Privilégie la **rotation** (Profit/h) plutôt que la marge unitaire.
+    # Conseils
+    "TipsTitle": {"fr":"Conseils rapides","en":"Quick tips","de":"Schnelle Tipps","es":"Consejos rápidos"},
+    "TipLines": {
+        "fr": """- Privilégie la **rotation** (Profit/h) plutôt que la marge unitaire.
 - Utilise la **watchlist** pour suivre 4–8 flips actifs.
 - Fixe un **seuil cuivre min** (>10–25c) pour éviter les ROI aberrants.
 - Utilise les **alertes** pour repérer instantanément les opportunités.
-- Diversifie et reviens souvent : le TP bouge toute la journée.",
-                 "en":"- Favor **rotation** (profit/h) over unit margin.
+- Diversifie et reviens souvent : le TP bouge toute la journée.""",
+        "en": """- Favor **rotation** (profit/h) over unit margin.
 - Use **watchlist** to track 4–8 active flips.
 - Set a **min copper** threshold (>10–25c) to avoid aberrant ROI.
 - Use **alerts** to catch opportunities instantly.
-- Diversify and revisit often: TP moves all day.",
-                 "de":"- Bevorzuge **Rotation** (Profit/h) statt Stückmarge.
+- Diversify and revisit often: TP moves all day.""",
+        "de": """- Bevorzuge **Rotation** (Profit/h) statt Stückmarge.
 - Nutze die **Watchlist** für 4–8 aktive Flips.
 - Setze eine **Kupfer-Untergrenze** (>10–25c) gegen Ausreißer-ROI.
 - Nutze **Alarme** für schnelle Chancen.
-- Diversifiziere und prüfe oft: TP bewegt sich ständig.",
-                 "es":"- Prioriza la **rotación** (beneficio/h) sobre el margen unitario.
+- Diversifiziere und prüfe oft: TP bewegt sich ständig.""",
+        "es": """- Prioriza la **rotación** (beneficio/h) sobre el margen unitario.
 - Usa **watchlist** para 4–8 flips activos.
 - Fija un **mín de cobre** (>10–25c) para evitar ROI aberrante.
 - Usa **alertas** para detectar oportunidades al instante.
-- Diversifica y vuelve a menudo: el TP se mueve todo el día."},
-
-    # À propos — le contenu exact demandé est géré en dur dans TAB4
-}
-
+- Diversifica y vuelve a menudo: el TP se mueve todo el día."""
+    },
 # ========================= i18n =========================
 if "lang" not in st.session_state:
     st.session_state["lang"] = "fr"
@@ -731,3 +731,4 @@ with TAB4:
     st.write("Open-source friendly. N'hésite pas à modifier/adapter.")
     st.write("Utilisation de la base de données de gw2tp.com")
     st.caption("🔨 escarbeille.4281 · 💬 Discord: escarmouche")
+
