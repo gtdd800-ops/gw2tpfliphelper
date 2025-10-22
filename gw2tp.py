@@ -1,9 +1,9 @@
 # -*- coding: utf-8 -*-
-# GW2TP Flips — v4
+# GW2TP Flips — v5
 # UI simplifiée + ROI robuste + Watchlist + Profit/heure + Rotation rapide + Alertes locales
 # + Optimisation panier (budget) + Export watchlist (CSV/JSON) + Heatmap ROI/Profit
-# 4 langues (FR/EN/DE/ES)
-# Exécution : streamlit run gw2tp_v4.py
+# 4 langues (FR/EN/DE/ES) — Sélecteur par drapeaux
+# Exécution : streamlit run gw2tp_v5.py
 
 import base64, struct, json, sqlite3, time, io
 from typing import Dict, List, Tuple
@@ -133,47 +133,28 @@ I18N = {
 
     # Conseils
     "TipsTitle": {"fr":"Conseils rapides","en":"Quick tips","de":"Schnelle Tipps","es":"Consejos rápidos"},
-    "TipLines": {
-    "fr": "- Privilégie la **rotation** (Profit/h) plutôt que la marge unitaire.\n"
-          "- Utilise la **watchlist** pour suivre 4–8 flips actifs.\n"
-          "- Fixe un **seuil cuivre min** (>10–25c) pour éviter les ROI aberrants.\n"
-          "- Utilise les **alertes** pour repérer instantanément les opportunités.\n"
-          "- Diversifie et reviens souvent : le TP bouge toute la journée.",
-    "en": "- Favor **rotation** (profit/h) over unit margin.\n"
-          "- Use **watchlist** to track 4–8 active flips.\n"
-          "- Set a **min copper** threshold (>10–25c) to avoid aberrant ROI.\n"
-          "- Use **alerts** to catch opportunities instantly.\n"
-          "- Diversify and revisit often: TP moves all day.",
-    "de": "- Bevorzuge **Rotation** (Profit/h) statt Stückmarge.\n"
-          "- Nutze die **Watchlist** für 4–8 aktive Flips.\n"
-          "- Setze eine **Kupfer-Untergrenze** (>10–25c) gegen Ausreißer-ROI.\n"
-          "- Nutze **Alarme** für schnelle Chancen.\n"
-          "- Diversifiziere und prüfe oft: TP bewegt sich ständig.",
-    "es": "- Prioriza la **rotación** (beneficio/h) sobre el margen unitario.\n"
-          "- Usa **watchlist** para 4–8 flips activos.\n"
-          "- Fija un **mín de cobre** (>10–25c) para evitar ROI aberrante.\n"
-          "- Usa **alertas** para detectar oportunidades al instante.\n"
-          "- Diversifica y vuelve a menudo: el TP se mueve todo el día."
-},
+    "TipLines": {"fr":"- Privilégie la **rotation** (Profit/h) plutôt que la marge unitaire.
+- Utilise la **watchlist** pour suivre 4–8 flips actifs.
+- Fixe un **seuil cuivre min** (>10–25c) pour éviter les ROI aberrants.
+- Utilise les **alertes** pour repérer instantanément les opportunités.
+- Diversifie et reviens souvent : le TP bouge toute la journée.",
+                 "en":"- Favor **rotation** (profit/h) over unit margin.
+- Use **watchlist** to track 4–8 active flips.
+- Set a **min copper** threshold (>10–25c) to avoid aberrant ROI.
+- Use **alerts** to catch opportunities instantly.
+- Diversify and revisit often: TP moves all day.",
+                 "de":"- Bevorzuge **Rotation** (Profit/h) statt Stückmarge.
+- Nutze die **Watchlist** für 4–8 aktive Flips.
+- Setze eine **Kupfer-Untergrenze** (>10–25c) gegen Ausreißer-ROI.
+- Nutze **Alarme** für schnelle Chancen.
+- Diversifiziere und prüfe oft: TP bewegt sich ständig.",
+                 "es":"- Prioriza la **rotación** (beneficio/h) sobre el margen unitario.
+- Usa **watchlist** para 4–8 flips activos.
+- Fija un **mín de cobre** (>10–25c) para evitar ROI aberrante.
+- Usa **alertas** para detectar oportunidades al instante.
+- Diversifica y vuelve a menudo: el TP se mueve todo el día."},
 
-    # À propos
-    "AboutLine1": {"fr":"GW2TP Flips v4 — UI simplifiée + productivité.","en":"GW2TP Flips v4 — Simplified UI + productivity.","de":"GW2TP Flips v4 — Vereinfachte UI + Produktivität.","es":"GW2TP Flips v4 — UI simplificada + productividad."},
-    "AboutLine2": {"fr":"Open‑source friendly. N'hésite pas à modifier/adapter.","en":"Open‑source friendly. Feel free to modify/adapt.","de":"Open‑source‑freundlich. Gerne anpassen.","es":"Amigable con open source. Siéntete libre de adaptar."},
-    "MadeWith": {"fr":"Made with ❤️ and Streamlit.","en":"Made with ❤️ and Streamlit.","de":"Mit ❤️ und Streamlit gemacht.","es":"Hecho con ❤️ y Streamlit."},
-
-    # Optim panier
-    "BasketOpt": {"fr":"Optimisation panier (budget)","en":"Basket optimization (budget)","de":"Warenkorb-Optimierung (Budget)","es":"Optimización de cesta (presupuesto)"},
-    "RunBasket": {"fr":"Optimiser le panier","en":"Optimize basket","de":"Warenkorb optimieren","es":"Optimizar cesta"},
-    "BasketBudget": {"fr":"Budget panier (g)","en":"Basket budget (g)","de":"Warenkorb-Budget (g)","es":"Presupuesto de cesta (o)"},
-    "BasketTarget": {"fr":"Cible","en":"Target","de":"Ziel","es":"Objetivo"},
-    "TargetProfitH": {"fr":"Maximiser Profit/h","en":"Maximize Profit/h","de":"Profit/h maximieren","es":"Maximizar beneficio/h"},
-    "TargetProfit": {"fr":"Maximiser Profit net","en":"Maximize Net profit","de":"Nettogewinn maximieren","es":"Maximizar beneficio neto"},
-    "BasketN": {"fr":"Limiter aux N meilleurs (0 = tous)","en":"Limit to top N (0 = all)","de":"Auf Top N begrenzen (0 = alle)","es":"Limitar a top N (0 = todos)"},
-    "BasketResult": {"fr":"Résultat panier optimisé","en":"Optimized basket result","de":"Optimierter Warenkorb","es":"Cesta optimizada"},
-    "DownloadBasketCSV": {"fr":"Télécharger panier (CSV)","en":"Download basket (CSV)","de":"Warenkorb herunterladen (CSV)","es":"Descargar cesta (CSV)"},
-
-    # Heatmap
-    "HeatmapTitle": {"fr":"Heatmap ROI vs Profit (Top 200)","en":"Heatmap ROI vs Profit (Top 200)","de":"Heatmap ROI vs Profit (Top 200)","es":"Heatmap ROI vs Beneficio (Top 200)"},
+    # À propos — le contenu exact demandé est géré en dur dans TAB4
 }
 
 # ========================= i18n =========================
@@ -194,7 +175,7 @@ def make_session() -> requests.Session:
     s.headers.update({
         "Accept": "application/json",
         "Accept-Encoding": "gzip, deflate, br, zstd",
-        "User-Agent": "GW2TP-Flips/4.0"
+        "User-Agent": "GW2TP-Flips/5.0"
     })
     retry = Retry(total=5, backoff_factor=0.5, status_forcelist=(429,500,502,503,504), allowed_methods=frozenset(["GET"]))
     adapter = HTTPAdapter(max_retries=retry, pool_connections=10, pool_maxsize=10)
@@ -203,37 +184,36 @@ def make_session() -> requests.Session:
 
 SESSION = make_session()
 
-# ========================= DB (historique + watchlist) =========================
-@st.cache_resource(show_spinner=False)
-def db_connect():
-    conn = sqlite3.connect(DB_PATH, isolation_level=None, timeout=30)
-    conn.execute("""
-    CREATE TABLE IF NOT EXISTS snapshots (
-        id INTEGER NOT NULL,
-        ts INTEGER NOT NULL,
-        bucket INTEGER NOT NULL,
-        buy INTEGER, sell INTEGER, supply INTEGER, demand INTEGER,
-        PRIMARY KEY (id, bucket)
+# ========================= DB init (création tables) =========================
+with sqlite3.connect(DB_PATH, isolation_level=None, timeout=30, check_same_thread=False) as _conn:
+    _conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS snapshots (
+            id INTEGER NOT NULL,
+            ts INTEGER NOT NULL,
+            bucket INTEGER NOT NULL,
+            buy INTEGER, sell INTEGER, supply INTEGER, demand INTEGER,
+            PRIMARY KEY (id, bucket)
+        )
+        """
     )
-    """)
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_snap_ts ON snapshots(ts)")
-    conn.execute("CREATE TABLE IF NOT EXISTS watchlist (id INTEGER PRIMARY KEY)")
-    return conn
+    _conn.execute("CREATE INDEX IF NOT EXISTS idx_snap_ts ON snapshots(ts)")
+    _conn.execute("CREATE TABLE IF NOT EXISTS watchlist (id INTEGER PRIMARY KEY)")
 
-# Watchlist helpers
+# ========================= Helpers DB =========================
 def wl_get_all() -> List[int]:
-    with db_connect() as conn:
+    with sqlite3.connect(DB_PATH, isolation_level=None, timeout=30, check_same_thread=False) as conn:
         cur = conn.execute("SELECT id FROM watchlist ORDER BY id")
         return [int(r[0]) for r in cur.fetchall()]
 
 def wl_add(ids: List[int]):
     if not ids: return
-    with db_connect() as conn:
+    with sqlite3.connect(DB_PATH, isolation_level=None, timeout=30, check_same_thread=False) as conn:
         conn.executemany("INSERT OR IGNORE INTO watchlist(id) VALUES(?)", [(int(x),) for x in ids])
 
 def wl_remove(ids: List[int]):
     if not ids: return
-    with db_connect() as conn:
+    with sqlite3.connect(DB_PATH, isolation_level=None, timeout=30, check_same_thread=False) as conn:
         conn.executemany("DELETE FROM watchlist WHERE id = ?", [(int(x),) for x in ids])
 
 # ========================= Helpers =========================
@@ -379,18 +359,24 @@ def persist_snapshot(df_bulk: pd.DataFrame):
     now = int(time.time())
     bucket = now // SNAPSHOT_BUCKET_SECONDS
     rows = [(int(r.id), now, bucket, int(r.buy), int(r.sell), int(r.supply), int(r.demand)) for r in df_bulk.itertuples()]
-    with db_connect() as conn:
-        conn.executemany("INSERT OR IGNORE INTO snapshots (id, ts, bucket, buy, sell, supply, demand) VALUES (?,?,?,?,?,?,?)", rows)
+    with sqlite3.connect(DB_PATH, isolation_level=None, timeout=30, check_same_thread=False) as conn:
+        conn.executemany(
+            "INSERT OR IGNORE INTO snapshots (id, ts, bucket, buy, sell, supply, demand) VALUES (?,?,?,?,?,?,?)",
+            rows,
+        )
 
 
 def fetch_metrics_for_ids(ids: List[int], hours_window=24, trend_hours=1):
     if not ids:
         return {}, {}, {}, {}
-    with db_connect() as conn:
+    with sqlite3.connect(DB_PATH, isolation_level=None, timeout=30, check_same_thread=False) as conn:
         now = int(time.time())
         since_window = now - hours_window * 3600
         q_marks = ",".join("?" for _ in ids)
-        cur = conn.execute(f"SELECT id, ts, buy, sell, supply, demand FROM snapshots WHERE id IN ({q_marks}) AND ts >= ? ORDER BY id, ts", (*ids, since_window))
+        cur = conn.execute(
+            f"SELECT id, ts, buy, sell, supply, demand FROM snapshots WHERE id IN ({q_marks}) AND ts >= ? ORDER BY id, ts",
+            (*ids, since_window),
+        )
         rows = cur.fetchall()
 
     data: Dict[int, List[Tuple[int,int,int,int,int]]] = {}
@@ -417,9 +403,12 @@ def fetch_metrics_for_ids(ids: List[int], hours_window=24, trend_hours=1):
 
 
 def fetch_timeseries_for_id(item_id: int, hours_window: int) -> pd.DataFrame:
-    with db_connect() as conn:
+    with sqlite3.connect(DB_PATH, isolation_level=None, timeout=30, check_same_thread=False) as conn:
         since = int(time.time()) - hours_window * 3600
-        cur = conn.execute("SELECT ts, buy, sell, supply, demand FROM snapshots WHERE id = ? AND ts >= ? ORDER BY ts", (int(item_id), since))
+        cur = conn.execute(
+            "SELECT ts, buy, sell, supply, demand FROM snapshots WHERE id = ? AND ts >= ? ORDER BY ts",
+            (int(item_id), since),
+        )
         rows = cur.fetchall()
     if not rows:
         return pd.DataFrame(columns=["ts","buy","sell","supply","demand"])
@@ -438,6 +427,7 @@ with left:
 with mid:
     st.metric(T("last_update"), time.strftime("%Y-%m-%d %H:%M:%S"))
 with right:
+    # Sélecteur de langue par drapeaux uniquement
     cols = st.columns(len(LANG_FLAGS))
     for i, (code, flag) in enumerate(LANG_FLAGS.items()):
         if cols[i].button(flag, use_container_width=True):
@@ -527,7 +517,7 @@ with st.expander(T("alerts"), expanded=False):
 if auto_refresh:
     try:
         from streamlit_autorefresh import st_autorefresh
-        st_autorefresh(interval=refresh_min * 60 * 1000, key="auto_refresh_key_v4")
+        st_autorefresh(interval=refresh_min * 60 * 1000, key="auto_refresh_key_v5")
     except Exception:
         pass
 
@@ -621,7 +611,7 @@ with TAB1:
                 wl_add(list(map(int, add_sel)))
                 st.toast("Watchlist ✨")
         with c_csv:
-            st.download_button(T("download_csv"), data=df_disp.to_csv(index=False), file_name="flips_gw2tp_v4.csv", mime="text/csv")
+            st.download_button(T("download_csv"), data=df_disp.to_csv(index=False), file_name="flips_gw2tp_v5.csv", mime="text/csv")
 
         st.dataframe(df_disp, use_container_width=True, hide_index=True)
 
@@ -630,7 +620,6 @@ with TAB1:
         hm = view.sort_values("Profit Net (PO)", ascending=False).head(200)
         if not hm.empty:
             fig, ax = plt.subplots(figsize=(8,5))
-            # 2D hist par défaut (pas de couleurs personnalisées)
             ax.hist2d(hm["ROI (%)"], hm["Profit Net (PO)"], bins=30)
             ax.set_xlabel(T("ROI_col")); ax.set_ylabel(T("TopProfit").split(" ")[0])
             st.pyplot(fig, clear_figure=True)
@@ -654,7 +643,6 @@ with TAB1:
         if st.button(T("RunBasket")) and not view.empty:
             df_pool = view.copy()
             if basket_topn > 0:
-                # tri par cible
                 if basket_target == T("TargetProfitH"):
                     df_pool = df_pool.sort_values(["Profit/h (est)", "Profit Net (PO)"], ascending=[False, False]).head(basket_topn)
                 else:
@@ -667,15 +655,12 @@ with TAB1:
                 if buy_c <= 0: continue
                 limit_qty = int(r.get("Qté optimisée", 0) or 0)
                 if limit_qty <= 0:
-                    # fallback: borne par Quantité (min)
                     limit_qty = int(r["Quantité (min)"]) if pd.notna(r["Quantité (min)"]) else 0
                 if limit_qty <= 0: continue
-                # score par unité selon la cible
                 if basket_target == T("TargetProfitH"):
                     score = float(r["Profit/h (est)"]) / max(limit_qty,1)
                 else:
-                    score = float(r["Profit Net (PO)"])  # profit unitaire g
-                # greedy : acheter autant que possible dans l'ordre des meilleurs scores/coûts
+                    score = float(r["Profit Net (PO)"])
                 max_afford = remaining // buy_c
                 take = int(min(limit_qty, max_afford))
                 if take <= 0: continue
@@ -736,9 +721,12 @@ with TAB2:
                 st.pyplot(fig2, clear_figure=True)
 
 with TAB3:
-    st.markdown(f"**{T('TipsTitle')}**\n\n{T('TipLines')}")
+    st.markdown(f"""**{T('TipsTitle')}**
+
+{T('TipLines')}""")
 
 with TAB4:
+    # À propos — texte exact demandé (non traduit)
     st.write("GW2TP Flips v3")
     st.write("Open-source friendly. N'hésite pas à modifier/adapter.")
     st.write("Utilisation de la base de données de gw2tp.com")
