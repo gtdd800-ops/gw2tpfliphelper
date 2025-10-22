@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-# GW2TP Flips — v2 (UI simplifiée + esthétique)
+# GW2TP Flips — v2 (UI simplifiée + esthétique, ROI robuste)
 # -------------------------------------------------
 # Dépendances : streamlit, requests, pandas, numpy, matplotlib
 # Exécution : streamlit run gw2tp_v2.py
@@ -37,10 +37,10 @@ I18N = {
         "es": "Flips del Trading Post (fuente: GW2TP)",
     },
     "byline": {
-        "fr": "🛠️ escarbeille.4281 · Discord : escarmouche",
-        "en": "🛠️ escarbeille.4281 · Discord: escarmouche",
-        "de": "🛠️ escarbeille.4281 · Discord: escarmouche",
-        "es": "🛠️ escarbeille.4281 · Discord: escarmouche",
+        "fr": "🔨 escarbeille.4281 · 💬 Discord: escarmouche",
+        "en": "🔨 escarbeille.4281 · 💬 Discord: escarmouche",
+        "de": "🔨 escarbeille.4281 · 💬 Discord: escarmouche",
+        "es": "🔨 escarbeille.4281 · 💬 Discord: escarmouche",
     },
     "last_update": {"fr":"Dernière mise à jour : ","en":"Last update: ","de":"Letztes Update: ","es":"Última actualización: "},
     "tab_flips": {"fr":"Flips","en":"Flips","de":"Flips","es":"Flips"},
@@ -176,11 +176,17 @@ def build_flips_df(df_bulk: pd.DataFrame, id2name: Dict[int, str]) -> pd.DataFra
     df["Prix Vente Net (PO)"] = (df["Prix Vente Net (c)"] / 10000.0).round(2)
     df["Profit Net (PO)"] = (df["Profit Net (c)"] / 10000.0).round(2)
 
+    # --- ROI robuste (anti-aberrations) ---
     buy_po = df["Prix Achat (PO)"].replace(0, np.nan)
-    df["ROI (%)"] = ((df["Profit Net (PO)"] / buy_po) * 100).replace([np.inf, -np.inf], np.nan).fillna(0).round(2)
+    roi = (df["Profit Net (PO)"] / buy_po) * 100
+    roi = roi.replace([np.inf, -np.inf], np.nan).fillna(0).clip(lower=-1000, upper=1000)
+    df["ROI (%)"] = roi.round(2)
 
     df["Quantité (min)"] = df[["supply","demand"]].min(axis=1).fillna(0).astype(int)
     df["ChatCode"] = df["id"].apply(lambda x: make_item_chat_code(int(x)))
+
+    # Nettoyage logique : retirer profits impossibles
+    df = df[df["Prix Vente Net (c)"] > df["Prix Achat (c)"]]
 
     df.rename(columns={"id":"ID","supply":"Supply","demand":"Demand"}, inplace=True)
     df["Profit Net (gsc)"] = df["Profit Net (c)"].fillna(0).astype(int).apply(gsc_emoji_from_copper)
@@ -314,7 +320,7 @@ st.set_page_config(
 left, mid, right = st.columns([1.4, 1, 1])
 with left:
     st.title(T("title"))
-    st.caption(T("byline"))
+    st.caption(T("byline"))  # 🔨 escarbeille.4281 · 💬 Discord: escarmouche
 with mid:
     st.metric(T("last_update"), time.strftime("%Y-%m-%d %H:%M:%S"))
 with right:
@@ -368,6 +374,11 @@ with st.expander(T("filters"), expanded=False):
         min_buy = st.number_input("Min buy (g)", 0.0, 1e9, 0.0, 0.5)
     with c3:
         max_buy = st.number_input("Max buy (g, 0 = ∞)", 0.0, 1e9, 0.0, 0.5)
+    c4, c5 = st.columns(2)
+    with c4:
+        min_buy_copper_filter = st.number_input("Min buy (copper) to consider", 0, 10_000, 10, 1)
+    with c5:
+        roi_cap = st.number_input("Cap ROI (%) (0 = auto 1000)", 0, 1_000_000, 0, 50)
 
 # ---- Historique & optimisation ----
 hist_tab, trend_tab = st.columns([1, 1])
@@ -390,11 +401,23 @@ if auto_refresh:
 
 # ========================= Pipeline =========================
 # Filtrage de base
-mask = (df_all["Profit Net (PO)"] >= min_profit) & (df_all["ROI (%)"] >= min_roi) & (df_all["Quantité (min)"] >= min_qty)
-if max_profit > 0: mask &= df_all["Profit Net (PO)"] <= max_profit
-if min_buy > 0: mask &= df_all["Prix Achat (PO)"] >= min_buy
-if max_buy > 0: mask &= df_all["Prix Achat (PO)"] <= max_buy
-if search_name: mask &= df_all["Nom"].str.contains(search_name, case=False, na=False)
+mask = (
+    (df_all["Profit Net (PO)"] >= min_profit)
+    & (df_all["ROI (%)"] >= min_roi)
+    & (df_all["Quantité (min)"] >= min_qty)
+)
+if max_profit > 0:
+    mask &= df_all["Profit Net (PO)"] <= max_profit
+if min_buy > 0:
+    mask &= df_all["Prix Achat (PO)"] >= min_buy
+if max_buy > 0:
+    mask &= df_all["Prix Achat (PO)"] <= max_buy
+if min_buy_copper_filter > 0:
+    mask &= df_all["Prix Achat (c)"].fillna(0) >= int(min_buy_copper_filter)
+if roi_cap > 0:
+    mask &= df_all["ROI (%)"] <= float(roi_cap)
+if search_name:
+    mask &= df_all["Nom"].str.contains(search_name, case=False, na=False)
 
 view = df_all[mask].reset_index(drop=True)
 
@@ -521,13 +544,9 @@ with TAB3:
     - Réduis le nombre de filtres au strict nécessaire.
     - Utilise *Recherche nom* pour cibler des familles (ex: *Rune*, *Sceau*, *Inscription*).
     - La *Qté optimisée* tient compte du budget, de la demande et, si possible, du rythme de ventes historique.
-    """)
-    st.markdown("""
-    **Astuces UI**
-    - Bascule *Compact* pour une vue plus lisible.
-    - Le CSV exporte exactement les colonnes affichées.
+    - Fixe un **seuil cuivre min** (>10c) pour éviter les ROI aberrants sur items à 1–2c.
+    - Évite d'immobiliser trop d'or sur un seul item : **diversifie** 4–8 flips actifs.
     """)
 
 with TAB4:
     st.caption("🔨 escarbeille.4281 · 💬 Discord: escarmouche")
-
