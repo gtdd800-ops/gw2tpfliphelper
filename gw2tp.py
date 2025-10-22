@@ -121,6 +121,9 @@ I18N = {
     "TopROI": {"fr":"Top ROI (%)","en":"Top ROI (%)","de":"Top ROI (%)","es":"Top ROI (%)"},
     "TotalProfitH": {"fr":"Profit/h total (est)","en":"Total Profit/h (est)","de":"Gesamt Profit/h (gesch.)","es":"Beneficio/h total (est)"},
     "Top20Profit": {"fr":"Top 20 — Profit Net (g)","en":"Top 20 — Net Profit (g)","de":"Top 20 — Nettogewinn (g)","es":"Top 20 — Beneficio neto (o)"},
+    "HeatmapTitle": {"fr":"Heatmap ROI vs Profit","en":"Heatmap ROI vs Profit","de":"Heatmap ROI vs Profit","es":"Heatmap ROI vs Profit"},
+    "Buy_g_axis": {"fr":"Achat (g)","en":"Buy (g)","de":"Kauf (g)","es":"Compra (o)"},
+    "Sell_g_axis": {"fr":"Vente 85% (g)","en":"Sell 85% (g)","de":"Verkauf 85% (g)","es":"Venta 85% (o)"},
 
     # historique UI
     "hist_hint": {"fr":"Visualise l'historique d'un item (si suivi activé)","en":"View item history (if tracking enabled)","de":"Historie anzeigen (wenn Tracking aktiv)","es":"Ver historial (si el seguimiento está activo)"},
@@ -128,11 +131,7 @@ I18N = {
     "no_item": {"fr":"Aucun item disponible.","en":"No item available.","de":"Kein Item verfügbar.","es":"No hay objeto disponible."},
     "choose_item": {"fr":"Choisir un objet","en":"Choose an item","de":"Objekt auswählen","es":"Elige un objeto"},
     "not_enough_hist": {"fr":"Pas encore assez d'historique pour tracer.","en":"Not enough history to plot yet.","de":"Noch nicht genug Historie zum Plotten.","es":"Aún no hay historial suficiente para graficar."},
-    "Buy_g_axis": {"fr":"Achat (g)","en":"Buy (g)","de":"Kauf (g)","es":"Compra (o)"},
-    "Sell_g_axis": {"fr":"Vente 85% (g)","en":"Sell 85% (g)","de":"Verkauf 85% (g)","es":"Venta 85% (o)"},
 
-    # Conseils
-    "TipsTitle": {"fr":"Conseils rapides","en":"Quick tips","de":"Schnelle Tipps","es":"Consejos rápidos"},
     # Conseils
     "TipsTitle": {"fr":"Conseils rapides","en":"Quick tips","de":"Schnelle Tipps","es":"Consejos rápidos"},
     "TipLines": {
@@ -157,6 +156,19 @@ I18N = {
 - Usa **alertas** para detectar oportunidades al instante.
 - Diversifica y vuelve a menudo: el TP se mueve todo el día."""
     },
+
+    # Optimisation panier (libellés manquants ajoutés)
+    "BasketOpt": {"fr":"Optimisation panier (budget)","en":"Basket optimization (budget)","de":"Warenkorb-Optimierung (Budget)","es":"Optimización de cesta (presupuesto)"},
+    "BasketBudget": {"fr":"Budget panier (g)","en":"Basket budget (g)","de":"Warenkorb-Budget (g)","es":"Presupuesto de la cesta (o)"},
+    "BasketTarget": {"fr":"Objectif panier","en":"Basket target","de":"Warenkorb-Ziel","es":"Objetivo de la cesta"},
+    "TargetProfitH": {"fr":"Maximiser Profit/h","en":"Maximize Profit/h","de":"Profit/h maximieren","es":"Maximizar beneficio/h"},
+    "TargetProfit": {"fr":"Maximiser Profit net","en":"Maximize Net Profit","de":"Nettogewinn maximieren","es":"Maximizar beneficio neto"},
+    "BasketN": {"fr":"Top N à considérer","en":"Top N to consider","de":"Top N berücksichtigen","es":"Top N a considerar"},
+    "RunBasket": {"fr":"Lancer optimisation","en":"Run optimization","de":"Optimierung starten","es":"Ejecutar optimización"},
+    "BasketResult": {"fr":"Allocation proposée","en":"Proposed allocation","de":"Vorgeschlagene Zuteilung","es":"Asignación propuesta"},
+    "DownloadBasketCSV": {"fr":"Télécharger panier (CSV)","en":"Download basket (CSV)","de":"Warenkorb herunterladen (CSV)","es":"Descargar cesta (CSV)"}
+}
+
 # ========================= i18n =========================
 if "lang" not in st.session_state:
     st.session_state["lang"] = "fr"
@@ -731,4 +743,5 @@ with TAB4:
     st.write("Open-source friendly. N'hésite pas à modifier/adapter.")
     st.write("Utilisation de la base de données de gw2tp.com")
     st.caption("🔨 escarbeille.4281 · 💬 Discord: escarmouche")
+
 
