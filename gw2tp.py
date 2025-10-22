@@ -1,208 +1,106 @@
-# streamlit run gw2tp.py
+# -*- coding: utf-8 -*-
+# GW2TP Flips — v2 (UI simplifiée + esthétique)
+# -------------------------------------------------
+# Dépendances : streamlit, requests, pandas, numpy, matplotlib
+# Exécution : streamlit run gw2tp_v2.py
+# -------------------------------------------------
+
 import base64, struct, json, sqlite3, time
+from dataclasses import dataclass
+from typing import Dict, List, Tuple
+
 import numpy as np
-import requests
 import pandas as pd
+import requests
 import streamlit as st
 import matplotlib.pyplot as plt
+
 from urllib3.util.retry import Retry
 from requests.adapters import HTTPAdapter
-import streamlit.components.v1 as components
-from streamlit_autorefresh import st_autorefresh
 
-# ---------- Constants ----------
+# ========================= Constantes =========================
 TP_NET = 0.85
 TIMEOUT = (5, 20)
 GW2TP_BULK_ITEMS = "https://api.gw2tp.com/1/bulk/items.json"
 GW2TP_BULK_NAMES = "https://api.gw2tp.com/1/bulk/items-names.json"
 DB_PATH = "gw2tp_history.sqlite"
-SNAPSHOT_BUCKET_SECONDS = 5 * 60  # un snapshot max toutes les 5 min / item
+SNAPSHOT_BUCKET_SECONDS = 5 * 60
 
-# ---------- Emoji pièces ----------
-EMO_G = "🟡"  # or
-EMO_S = "⚪"  # argent
-EMO_C = "🟠"  # cuivre
-
-# ---------- i18n (FR/EN/DE/ES) ----------
+EMO_G, EMO_S, EMO_C = "🟡", "⚪", "🟠"
 LANG_FLAGS = {"fr":"🇫🇷","en":"🇬🇧","de":"🇩🇪","es":"🇪🇸"}
 
 I18N = {
-    # En-têtes / titres / captions
-    "🛠️ escarbeille.4281 · Discord : escarmouche": {
-        "en": "🛠️ escarbeille.4281 · Discord: escarmouche",
-        "de": "🛠️ escarbeille.4281 · Discord: escarmouche",
-        "es": "🛠️ escarbeille.4281 · Discord: escarmouche",
-    },
-    "Flips Trading Post (source: GW2TP)": {
+    "title": {
+        "fr": "Flips Trading Post (source: GW2TP)",
         "en": "Trading Post Flips (source: GW2TP)",
         "de": "Trading-Post-Flips (Quelle: GW2TP)",
         "es": "Flips del Trading Post (fuente: GW2TP)",
     },
-    "Dernière mise à jour : ": {
-        "en": "Last update: ",
-        "de": "Letztes Update: ",
-        "es": "Última actualización: ",
+    "byline": {
+        "fr": "🛠️ escarbeille.4281 · Discord : escarmouche",
+        "en": "🛠️ escarbeille.4281 · Discord: escarmouche",
+        "de": "🛠️ escarbeille.4281 · Discord: escarmouche",
+        "es": "🛠️ escarbeille.4281 · Discord: escarmouche",
     },
-    "Langue": {"en": "Language", "de": "Sprache", "es": "Idioma"},
-
-    # Sidebar
-    "Actualisation": {"en": "Refresh", "de": "Aktualisierung", "es": "Actualización"},
-    "Auto-refresh": {"en": "Auto-refresh", "de": "Auto-Refresh", "es": "Autoactualización"},
-    "Intervalle (minutes)": {"en": "Interval (minutes)", "de": "Intervall (Minuten)", "es": "Intervalo (minutos)"},
-    "Un snapshot est enregistré à chaque refresh (5 min max par item).": {
-        "en": "A snapshot is saved on each refresh (max once/5 min per item).",
-        "de": "Bei jeder Aktualisierung wird ein Snapshot gespeichert (max alle 5 Min pro Item).",
-        "es": "Se guarda una instantánea en cada actualización (máx. una cada 5 min por objeto).",
-    },
-
-    "Filtres - Profits": {"en": "Filters – Profit", "de": "Filter – Profit", "es": "Filtros – Beneficio"},
-    "Profit net min (or)": {"en": "Min net profit (g)", "de": "Min Nettogewinn (g)", "es": "Beneficio neto mín (o)"},
-    "Profit net max (or, 0 = illimité)": {"en": "Max net profit (g, 0 = unlimited)", "de": "Max. Nettogewinn (g, 0 = unbegrenzt)", "es": "Beneficio neto máx (o, 0 = ilimitado)"},
-    "ROI min (%)": {"en": "Min ROI (%)", "de": "Min. ROI (%)", "es": "ROI mín (%)"},
-
-    # --- Nettoyage / Outliers (nouveaux libellés) ---
-    "Nettoyage / Outliers": {"en": "Cleaning / Outliers", "de": "Bereinigung / Ausreißer", "es": "Limpieza / Atípicos"},
-    "Ignorer si prix d'achat < (cuivre)": {"en": "Ignore if buy price < (copper)", "de": "Ignoriere, wenn Kaufpreis < (Kupfer)", "es": "Ignorar si precio de compra < (cobre)"},
-    "Exclure ROI négatifs": {"en": "Exclude negative ROI", "de": "Negative ROI ausschließen", "es": "Excluir ROI negativos"},
-    "Seuil ROI max (%) (0 = auto)": {"en": "Max ROI (%) threshold (0 = auto)", "de": "Max. ROI (%) (0 = auto)", "es": "ROI máx (%) (0 = auto)"},
-    "Méthode auto des outliers (si ROI max = 0)": {"en": "Auto outlier method (if ROI max = 0)", "de": "Autom. Ausreißermethode (wenn ROI max = 0)", "es": "Método auto de atípicos (si ROI máx = 0)"},
-    "IQR (1.5×)": {"en": "IQR (1.5×)", "de": "IQR (1,5×)", "es": "IQR (1,5×)"},
-    "Percentile 99.5%": {"en": "99.5th percentile", "de": "99,5. Perzentil", "es": "Percentil 99,5%"},
-
-    "Volume": {"en": "Volume", "de": "Volumen", "es": "Volumen"},
-    "Quantité min (min(demand, supply))": {"en": "Min quantity (min(demand, supply))", "de": "Mindestmenge (min(Nachfrage, Angebot))", "es": "Cantidad mín (min(demanda, oferta))"},
-    "Quantité max (min(demand, supply), 0 = illimité)": {"en": "Max quantity (min(demand, supply), 0 = unlimited)", "de": "Max. Menge (min(Nachfrage, Angebot), 0 = unbegrenzt)", "es": "Cantidad máx (min(demanda, oferta), 0 = ilimitado)"},
-    "Ventes min sur la période": {"en": "Min sales over period", "de": "Min. Verkäufe im Zeitraum", "es": "Ventas mín en el periodo"},
-
-    "Prix (or)": {"en": "Price (gold)", "de": "Preis (Gold)", "es": "Precio (oro)"},
-    "Prix d'achat minimum": {"en": "Min buy price", "de": "Min. Kaufpreis", "es": "Precio de compra mín"},
-    "Prix d'achat maximum (0 = illimité)": {"en": "Max buy price (0 = unlimited)", "de": "Max. Kaufpreis (0 = unbegrenzt)", "es": "Precio de compra máx (0 = ilimitado)"},
-    "Prix de vente min (net)": {"en": "Min sell price (net)", "de": "Min. Verkaufspreis (netto)", "es": "Precio de venta mín (neto)"},
-    "Prix de vente max (net, 0 = illimité)": {"en": "Max sell price (net, 0 = unlimited)", "de": "Max. Verkaufspreis (netto, 0 = unbegrenzt)", "es": "Precio de venta máx (neto, 0 = ilimitado)"},
-
-    "Nom / Cache": {"en": "Name / Cache", "de": "Name / Cache", "es": "Nombre / Caché"},
-    "Recherche par nom (contient)": {"en": "Search by name (contains)", "de": "Suche nach Name (enthält)", "es": "Buscar por nombre (contiene)"},
-    "Durée du cache (sec)": {"en": "Cache duration (sec)", "de": "Cache-Dauer (Sek.)", "es": "Duración de caché (s)"},
-    "Stratégie": {"en": "Strategy", "de": "Strategie", "es": "Estrategia"},
-    "Preset": {"en": "Preset", "de": "Voreinstellung", "es": "Preajuste"},
-    "Personnalisé": {"en": "Custom", "de": "Benutzerdefiniert", "es": "Personalizado"},
-    "Prudent": {"en": "Cautious", "de": "Vorsichtig", "es": "Prudente"},
-    "Équilibré": {"en": "Balanced", "de": "Ausgewogen", "es": "Equilibrado"},
-    "Agressif": {"en": "Aggressive", "de": "Aggressiv", "es": "Agresivo"},
-    "Profil de risque (0 = prudent, 100 = agressif)": {"en": "Risk profile (0 = cautious, 100 = aggressive)", "de": "Risikoprofil (0 = vorsichtig, 100 = aggressiv)", "es": "Perfil de riesgo (0 = prudente, 100 = agresivo)"},
-
-    "Historique en local": {"en": "Local history", "de": "Lokale Historie", "es": "Histórico local"},
-    "Snapshots 5 min → estimations (période) + tendances.": {"en": "5-min snapshots → estimates (window) + trends.", "de": "5-Min-Snapshots → Schätzungen (Zeitraum) + Trends.", "es": "Instantáneas cada 5 min → estimaciones (periodo) + tendencias."},
-    "Activer le suivi (SQLite local)": {"en": "Enable tracking (local SQLite)", "de": "Tracking aktivieren (lokales SQLite)", "es": "Activar seguimiento (SQLite local)"},
-    "Durée d'analyse (heures)": {"en": "Analysis window (hours)", "de": "Analysezeitraum (Stunden)", "es": "Ventana de análisis (horas)"},
-    "Fenêtre tendance ΔSupply/Demand (heures)": {"en": "Trend window ΔSupply/Demand (hours)", "de": "Trendfenster ΔAngebot/Nachfrage (Stunden)", "es": "Ventana de tendencia ΔOferta/Demanda (horas)"},
-    "Échelle logarithmique (graphe Offre/Demande)": {"en": "Log scale (Supply/Demand chart)", "de": "Log-Skala (Angebot/Nachfrage-Graph)", "es": "Escala logarítmica (gráfico Oferta/Demanda)"},
-
-    # Corps / tableaux
-    "Aucun flip avec ces filtres.": {"en": "No flips with these filters.", "de": "Keine Flips mit diesen Filtern.", "es": "No hay flips con estos filtros."},
-    "objets — période historique : ": {"en": "items — history window: ", "de": "Objekte — Historienzeitraum: ", "es": "objetos — ventana histórica: "},
-    " | ΔSupply/Demand : ": {"en": " | ΔSupply/Demand: ", "de": " | ΔAngebot/Nachfrage: ", "es": " | ΔOferta/Demanda: "},
-
-    # Colonnes
-    "Nom": {"en": "Name", "de": "Name", "es": "Nombre"},
-    "Profit Net (PO)": {"en": "Net Profit (g)", "de": "Nettogewinn (g)", "es": "Beneficio neto (o)"},
-    "ROI (%)": {"en": "ROI (%)", "de": "ROI (%)", "es": "ROI (%)"},
-    "Score": {"en": "Score", "de": "Score", "es": "Puntuación"},
-    "Prix Achat (PO)": {"en": "Buy Price (g)", "de": "Kaufpreis (g)", "es": "Precio compra (o)"},
-    "Prix Vente Net (PO)": {"en": "Net Sell Price (g)", "de": "Netto-Verkaufspreis (g)", "es": "Precio venta neto (o)"},
-    "Quantité (min)": {"en": "Quantity (min)", "de": "Menge (min)", "es": "Cantidad (mín)"},
-    "Supply": {"en": "Supply", "de": "Angebot", "es": "Oferta"},
-    "Demand": {"en": "Demand", "de": "Nachfrage", "es": "Demanda"},
-    "ID": {"en": "ID", "de": "ID", "es": "ID"},
-    "ChatCode": {"en": "ChatCode", "de": "ChatCode", "es": "ChatCode"},
-
-    # Section prix g/s/c
-    "Affichage prix (g/s/c)": {"en": "Price display (g/s/c)", "de": "Preisanzeige (g/s/c)", "es": "Vista de precios (g/s/c)"},
-    "Lignes à afficher (prix g/s/c)": {"en": "Rows to show (g/s/c prices)", "de": "Zeilen anzeigen (g/s/c-Preise)", "es": "Filas a mostrar (precios g/s/c)"},
-    "Profit Net": {"en": "Net Profit", "de": "Nettogewinn", "es": "Beneficio neto"},
-    "Prix Achat": {"en": "Buy Price", "de": "Kaufpreis", "es": "Precio de compra"},
-    "Vente nette (85%)": {"en": "Net sell (85%)", "de": "Nettoverkauf (85%)", "es": "Venta neta (85%)"},
-    "Copier": {"en": "Copy", "de": "Kopieren", "es": "Copiar"},
-
-    # Graphes / labels
-    "Métrique du graphique": {"en": "Chart metric", "de": "Diagrammmetrik", "es": "Métrica del gráfico"},
-    "Score (profil de risque)": {"en": "Score (risk profile)", "de": "Score (Risikoprofil)", "es": "Puntuación (perfil de riesgo)"},
-    "Top 20 par Profit Net": {"en": "Top 20 by Net Profit", "de": "Top 20 nach Nettogewinn", "es": "Top 20 por beneficio neto"},
-    "Top 20 (GW2TP) — Profit Net": {"en": "Top 20 (GW2TP) — Net Profit", "de": "Top 20 (GW2TP) — Nettogewinn", "es": "Top 20 (GW2TP) — Beneficio neto"},
-    "Top 20 par Score (profil de risque)": {"en": "Top 20 by Score (risk profile)", "de": "Top 20 nach Score (Risikoprofil)", "es": "Top 20 por puntuación (perfil de riesgo)"},
-    "Top 20 (GW2TP) — Score": {"en": "Top 20 (GW2TP) — Score", "de": "Top 20 (GW2TP) — Score", "es": "Top 20 (GW2TP) — Puntuación"},
-
-    # Historique / courbes
-    "Évolution Offre / Demande sur la période": {"en": "Supply / Demand over the period", "de": "Angebot / Nachfrage über den Zeitraum", "es": "Oferta / Demanda en el periodo"},
-    "Aucun item à tracer.": {"en": "No item to plot.", "de": "Kein Objekt zu zeichnen.", "es": "No hay objeto para trazar."},
-    "Choisir un objet": {"en": "Choose an item", "de": "Objekt auswählen", "es": "Elige un objeto"},
-    "Pas encore assez d'historique pour tracer (laisse l'app tourner).": {"en": "Not enough history to plot yet (leave the app running).", "de": "Noch nicht genug Historie zum Plotten (App weiterlaufen lassen).", "es": "Aún no hay historial suficiente para graficar (deja la app ejecutándose)."},
-    "Offre / Demande — ": {"en": "Supply / Demand — ", "de": "Angebot / Nachfrage — ", "es": "Oferta / Demanda — "},
-    "Temps": {"en": "Time", "de": "Zeit", "es": "Tiempo"},
-    "Quantités": {"en": "Quantities", "de": "Mengen", "es": "Cantidades"},
-    "Évolution des prix (ultra clean)": {"en": "Price evolution (ultra clean)", "de": "Preisentwicklung (ultra clean)", "es": "Evolución de precios (ultra clean)"},
-    "Achat (PO)": {"en": "Buy (g)", "de": "Kauf (g)", "es": "Compra (o)"},
-    "Vente nette 85% (PO)": {"en": "Net sell 85% (g)", "de": "Nettoverkauf 85% (g)", "es": "Venta neta 85% (o)"},
-    "Prix — ": {"en": "Price — ", "de": "Preis — ", "es": "Precio — "},
-    "Prix (g)": {"en": "Price (g)", "de": "Preis (g)", "es": "Precio (o)"},
-
-    # Divers
-    "Acheté période": {"en": "Bought in period", "de": "Gekauft im Zeitraum", "es": "Comprado en el periodo"},
-    "Vendu période": {"en": "Sold in period", "de": "Verkauft im Zeitraum", "es": "Vendido en el periodo"},
-    "ΔSupply": {"en": "ΔSupply", "de": "ΔAngebot", "es": "ΔOferta"},
-    "ΔDemand": {"en": "ΔDemand", "de": "ΔNachfrage", "es": "ΔDemanda"},
-
-    # Erreurs
-    "Erreur enregistrement historique : ": {"en": "History save error: ", "de": "Fehler beim Speichern der Historie: ", "es": "Error al guardar el histórico: "},
-
-    # CSV
-    "Télécharger CSV (résultats filtrés)": {"en": "Download CSV (filtered results)", "de": "CSV herunterladen (gefilterte Ergebnisse)", "es": "Descargar CSV (resultados filtrados)"},
-
-    # -------- Ajouts OPTI --------
-    "Optimisation d'achat": {"en":"Buy optimization", "de":"Kaufoptimierung", "es":"Optimización de compra"},
-    "Budget (or, 0 = illimité)": {"en":"Budget (g, 0 = unlimited)", "de":"Budget (g, 0 = unbegrenzt)", "es":"Presupuesto (o, 0 = ilimitado)"},
-    "Horizon de revente (heures)": {"en":"Resale horizon (hours)", "de":"Wiederverkaufshorizont (Stunden)", "es":"Horizonte de reventa (horas)"},
-    "Marge de sécurité (%)": {"en":"Safety margin (%)", "de":"Sicherheitsmarge (%)", "es":"Margen de seguridad (%)"},
-    "Qté optimisée": {"en":"Opt. qty", "de":"Optim. Menge", "es":"Cant. óptima"},
-    "Profit net optimisé (PO)": {"en":"Optimized net profit (g)", "de":"Optimierter Nettogewinn (g)", "es":"Beneficio neto optimizado (o)"},
-    "Profit net optimisé": {"en":"Optimized net profit", "de":"Optimierter Nettogewinn", "es":"Beneficio neto optimizado"},
+    "last_update": {"fr":"Dernière mise à jour : ","en":"Last update: ","de":"Letztes Update: ","es":"Última actualización: "},
+    "tab_flips": {"fr":"Flips","en":"Flips","de":"Flips","es":"Flips"},
+    "tab_history": {"fr":"Historique","en":"History","de":"Historie","es":"Histórico"},
+    "tab_advanced": {"fr":"Paramètres avancés","en":"Advanced","de":"Erweitert","es":"Avanzado"},
+    "tab_about": {"fr":"À propos","en":"About","de":"Info","es":"Acerca de"},
+    "refresh": {"fr":"Auto-refresh","en":"Auto-refresh","de":"Auto-Refresh","es":"Autoactualización"},
+    "interval": {"fr":"Intervalle (min)","en":"Interval (min)","de":"Intervall (Min)","es":"Intervalo (min)"},
+    "essentials": {"fr":"Essentiels","en":"Essentials","de":"Essentials","es":"Esenciales"},
+    "filters": {"fr":"Filtres","en":"Filters","de":"Filter","es":"Filtros"},
+    "budget": {"fr":"Budget (or, 0 = illimité)","en":"Budget (g, 0 = unlimited)","de":"Budget (g, 0 = unbegrenzt)","es":"Presupuesto (o, 0 = ilimitado)"},
+    "min_profit": {"fr":"Profit net min (or)","en":"Min net profit (g)","de":"Min. Nettogewinn (g)","es":"Beneficio neto mín (o)"},
+    "min_roi": {"fr":"ROI min (%)","en":"Min ROI (%)","de":"Min. ROI (%)","es":"ROI mín (%)"},
+    "min_qty": {"fr":"Quantité min","en":"Min quantity","de":"Mindestmenge","es":"Cantidad mín"},
+    "search": {"fr":"Recherche nom (contient)","en":"Search name (contains)","de":"Suche Name (enthält)","es":"Buscar nombre (contiene)"},
+    "risk": {"fr":"Profil de risque","en":"Risk profile","de":"Risikoprofil","es":"Perfil de riesgo"},
+    "preset": {"fr":"Preset","en":"Preset","de":"Preset","es":"Preset"},
+    "custom": {"fr":"Personnalisé","en":"Custom","de":"Benutzerdefiniert","es":"Personalizado"},
+    "cautious": {"fr":"Prudent","en":"Cautious","de":"Vorsichtig","es":"Prudente"},
+    "balanced": {"fr":"Équilibré","en":"Balanced","de":"Ausgewogen","es":"Equilibrado"},
+    "aggressive": {"fr":"Agressif","en":"Aggressive","de":"Aggressiv","es":"Agresivo"},
+    "download_csv": {"fr":"Télécharger CSV","en":"Download CSV","de":"CSV herunterladen","es":"Descargar CSV"},
+    "no_rows": {"fr":"Aucun flip avec ces filtres.","en":"No flips with these filters.","de":"Keine Flips mit diesen Filtern.","es":"No hay flips con estos filtros."},
+    "optimized": {"fr":"Optimisation d'achat","en":"Buy optimization","de":"Kaufoptimierung","es":"Optimización de compra"},
+    "horizon": {"fr":"Horizon de revente (h)","en":"Resale horizon (h)","de":"Wiederverkaufshorizont (h)","es":"Horizonte de reventa (h)"},
+    "safety": {"fr":"Marge de sécurité (%)","en":"Safety margin (%)","de":"Sicherheitsmarge (%)","es":"Margen de seguridad (%)"},
+    "history_enable": {"fr":"Activer le suivi (SQLite local)","en":"Enable tracking (local SQLite)","de":"Tracking aktivieren (lokales SQLite)","es":"Activar seguimiento (SQLite local)"},
+    "history_window": {"fr":"Fenêtre d'analyse (h)","en":"Analysis window (h)","de":"Analysezeitraum (h)","es":"Ventana de análisis (h)"},
+    "trend_window": {"fr":"Fenêtre tendance ΔSupply/Demand (h)","en":"Trend window ΔSupply/Demand (h)","de":"Trendfenster ΔAngebot/Nachfrage (h)","es":"Ventana de tendencia ΔOferta/Demanda (h)"},
 }
 
-def T(fr_text: str) -> str:
-    lang = st.session_state.get("lang", "fr")
-    if lang == "fr":
-        return fr_text
-    trans = I18N.get(fr_text, {})
-    return trans.get(lang, fr_text)
-
-def language_switcher():
-    st.markdown("### " + T("Langue"))
-    cols = st.columns(len(LANG_FLAGS))
-    for i, (code, flag) in enumerate(LANG_FLAGS.items()):
-        if cols[i].button(flag, use_container_width=True):
-            st.session_state["lang"] = code
-
-# Valeurs par défaut langue AVANT set_page_config
+# ========================= i18n =========================
 if "lang" not in st.session_state:
     st.session_state["lang"] = "fr"
 
-# ---------- HTTP session ----------
+def T(key: str) -> str:
+    lang = st.session_state.get("lang", "fr")
+    d = I18N.get(key)
+    if isinstance(d, dict):
+        return d.get(lang, d.get("fr", key))
+    return key
+
+# ========================= HTTP session =========================
+@st.cache_resource(show_spinner=False)
 def make_session() -> requests.Session:
     s = requests.Session()
     s.headers.update({
         "Accept": "application/json",
         "Accept-Encoding": "gzip, deflate, br, zstd",
-        "User-Agent": "GW2TP-Flips/1.0"
+        "User-Agent": "GW2TP-Flips/2.0"
     })
     retry = Retry(total=5, backoff_factor=0.5, status_forcelist=(429,500,502,503,504), allowed_methods=frozenset(["GET"]))
     adapter = HTTPAdapter(max_retries=retry, pool_connections=10, pool_maxsize=10)
-    s.mount("https://", adapter)
-    s.mount("http://", adapter)
+    s.mount("https://", adapter); s.mount("http://", adapter)
     return s
 
 SESSION = make_session()
 
-# ---------- DB ----------
+# ========================= DB (historique local) =========================
+@st.cache_resource(show_spinner=False)
 def db_connect():
     conn = sqlite3.connect(DB_PATH, isolation_level=None, timeout=30)
     conn.execute("""
@@ -217,20 +115,145 @@ def db_connect():
     conn.execute("CREATE INDEX IF NOT EXISTS idx_snap_ts ON snapshots(ts)")
     return conn
 
+# ========================= Helpers =========================
+def gsc_emoji_from_copper(c: int) -> str:
+    sign = "-" if c < 0 else ""
+    c = abs(int(c)); g = c // 10000; s = (c % 10000) // 100; cc = c % 100
+    parts = []
+    if g > 0: parts.append(f"{g}{EMO_G}")
+    if s > 0 or g > 0: parts.append(f"{s}{EMO_S}")
+    parts.append(f"{cc}{EMO_C}")
+    return sign + " ".join(parts)
+
+@st.cache_data(ttl=300, show_spinner=False)
+def fetch_bulk_items() -> pd.DataFrame:
+    for url in (GW2TP_BULK_ITEMS, GW2TP_BULK_ITEMS.replace("https://","http://")):
+        r = SESSION.get(url, timeout=TIMEOUT)
+        if r.ok:
+            obj = r.json()
+            return pd.DataFrame(obj.get("items", []), columns=obj.get("columns", []))
+    return pd.DataFrame(columns=["id","buy","sell","supply","demand"])
+
+@st.cache_data(ttl=300, show_spinner=False)
+def fetch_item_names() -> Dict[int, str]:
+    for url in (GW2TP_BULK_NAMES, GW2TP_BULK_NAMES.replace("https://","http://")):
+        r = SESSION.get(url, timeout=TIMEOUT)
+        if r.ok:
+            items = r.json().get("items", [])
+            return {int(x[0]): x[1] for x in items if len(x) >= 2}
+    return {}
+
+@st.cache_data(ttl=300, show_spinner=False)
+def get_bulk_and_df():
+    bulk = fetch_bulk_items()
+    names = fetch_item_names()
+    df = build_flips_df(bulk, names)
+    return bulk, df
+
+# ========================= Dataset =========================
+def make_item_chat_code(item_id: int, qty: int = 1) -> str:
+    q = max(1, min(255, int(qty)))
+    data = bytearray([0x02, q]) + struct.pack("<I", int(item_id)) + bytearray([0x00])
+    return "[&" + base64.b64encode(bytes(data)).decode("ascii") + "]"
+
+
+def build_flips_df(df_bulk: pd.DataFrame, id2name: Dict[int, str]) -> pd.DataFrame:
+    if df_bulk.empty:
+        return pd.DataFrame(columns=[
+            "Nom","ID","Prix Achat (PO)","Prix Vente Net (PO)","Profit Net (PO)","ROI (%)",
+            "Quantité (min)","Supply","Demand","ChatCode",
+            "Prix Achat (c)","Prix Vente Net (c)","Profit Net (c)",
+            "Profit Net (gsc)"
+        ])
+
+    df = df_bulk.copy()
+    df["Nom"] = df["id"].map(id2name).fillna("")
+    df["Prix Achat (c)"] = df["buy"].astype("Int64")
+    df["Prix Vente Net (c)"] = (df["sell"] * TP_NET).round().astype("Int64")
+    df["Profit Net (c)"] = (df["Prix Vente Net (c)"] - df["Prix Achat (c)"]).astype("Int64")
+
+    df["Prix Achat (PO)"] = (df["Prix Achat (c)"] / 10000.0).round(2)
+    df["Prix Vente Net (PO)"] = (df["Prix Vente Net (c)"] / 10000.0).round(2)
+    df["Profit Net (PO)"] = (df["Profit Net (c)"] / 10000.0).round(2)
+
+    buy_po = df["Prix Achat (PO)"].replace(0, np.nan)
+    df["ROI (%)"] = ((df["Profit Net (PO)"] / buy_po) * 100).replace([np.inf, -np.inf], np.nan).fillna(0).round(2)
+
+    df["Quantité (min)"] = df[["supply","demand"]].min(axis=1).fillna(0).astype(int)
+    df["ChatCode"] = df["id"].apply(lambda x: make_item_chat_code(int(x)))
+
+    df.rename(columns={"id":"ID","supply":"Supply","demand":"Demand"}, inplace=True)
+    df["Profit Net (gsc)"] = df["Profit Net (c)"].fillna(0).astype(int).apply(gsc_emoji_from_copper)
+
+    return df[[
+        "Nom","ID","Prix Achat (PO)","Prix Vente Net (PO)","Profit Net (PO)","ROI (%)",
+        "Quantité (min)","Supply","Demand","ChatCode",
+        "Prix Achat (c)","Prix Vente Net (c)","Profit Net (c)","Profit Net (gsc)"
+    ]]
+
+# ========================= Scoring & opti =========================
+PRESET_TO_RISK = {"Prudent": 20, "Équilibré": 50, "Agressif": 80}
+
+
+def add_risk_score(df: pd.DataFrame, risk_level: int) -> pd.DataFrame:
+    if df.empty:
+        return df
+    w_roi = risk_level / 100.0
+    w_vol = 1 - w_roi
+    roi = df["ROI (%)"].clip(lower=0).fillna(0)
+    vol = np.log10(df["Quantité (min)"].fillna(0) + 1)
+
+    def norm(s):
+        return (s - s.min()) / (s.max() - s.min()) if s.max() > s.min() else s * 0
+
+    df = df.copy()
+    df["Score"] = (w_roi * norm(roi) + w_vol * norm(vol)).round(3)
+    return df
+
+
+def compute_optimal_qty(row, budget_gold: float, horizon_h: int, safety_pct: int, hist_window_h: int, sold_in_period: int = None):
+    buy_c = int(row.get("Prix Achat (c)", 0) or 0)
+    profit_c = int(row.get("Profit Net (c)", 0) or 0)
+    if buy_c <= 0 or profit_c <= 0:
+        return 0, 0
+
+    supply = int(row.get("Supply", 0) or 0)
+    demand = int(row.get("Demand", 0) or 0)
+
+    # Cap budget
+    cap_budget = 10**9
+    if budget_gold and budget_gold > 0:
+        budget_c = int(round(budget_gold * 10000))
+        cap_budget = max(0, budget_c // buy_c)
+
+    # Cap revente (simple : demande), optionnellement basé sur historique
+    sell_capacity = int(demand)
+    if (sold_in_period is not None) and (hist_window_h or 0) > 0:
+        rate = max(0.0, float(sold_in_period)) / float(hist_window_h)
+        sell_capacity = int(rate * float(horizon_h))
+
+    sell_capacity = int(sell_capacity * (max(10, min(100, safety_pct)) / 100.0))
+
+    qty = max(0, min(supply, sell_capacity, cap_budget))
+    total_profit_c = qty * profit_c
+    return qty, total_profit_c
+
+# ========================= Historique (SQLite) =========================
+
 def persist_snapshot(df_bulk: pd.DataFrame):
     if df_bulk.empty:
         return
     now = int(time.time())
     bucket = now // SNAPSHOT_BUCKET_SECONDS
-    rows = [(int(r.id), now, bucket, int(r.buy), int(r.sell),
-             int(r.supply), int(r.demand)) for r in df_bulk.itertuples()]
+    rows = [(int(r.id), now, bucket, int(r.buy), int(r.sell), int(r.supply), int(r.demand)) for r in df_bulk.itertuples()]
     with db_connect() as conn:
         conn.executemany(
             "INSERT OR IGNORE INTO snapshots (id, ts, bucket, buy, sell, supply, demand) VALUES (?,?,?,?,?,?,?)",
-            rows
+            rows,
         )
 
-def fetch_metrics_for_ids(ids, hours_window=24, trend_hours=1):
+
+def fetch_metrics_for_ids(ids: List[int], hours_window=24, trend_hours=1):
     if not ids:
         return {}, {}, {}, {}
     with db_connect() as conn:
@@ -238,13 +261,12 @@ def fetch_metrics_for_ids(ids, hours_window=24, trend_hours=1):
         since_window = now - hours_window * 3600
         q_marks = ",".join("?" for _ in ids)
         cur = conn.execute(
-            f"SELECT id, ts, buy, sell, supply, demand FROM snapshots "
-            f"WHERE id IN ({q_marks}) AND ts >= ? ORDER BY id, ts",
-            (*ids, since_window)
+            f"SELECT id, ts, buy, sell, supply, demand FROM snapshots WHERE id IN ({q_marks}) AND ts >= ? ORDER BY id, ts",
+            (*ids, since_window),
         )
         rows = cur.fetchall()
 
-    data = {}
+    data: Dict[int, List[Tuple[int,int,int,int,int]]] = {}
     for id_, ts, buy, sell, supply, demand in rows:
         data.setdefault(id_, []).append((ts, buy, sell, supply, demand))
 
@@ -253,8 +275,7 @@ def fetch_metrics_for_ids(ids, hours_window=24, trend_hours=1):
     since_trend = now - trend_hours * 3600
     for id_, arr in data.items():
         df = pd.DataFrame(arr, columns=["ts","buy","sell","supply","demand"]).sort_values("ts")
-        dsup = df["supply"].diff()
-        ddem = df["demand"].diff()
+        dsup = df["supply"].diff(); ddem = df["demand"].diff()
         sold[id_]   = int(np.maximum(-dsup, 0).sum(skipna=True)) if len(df)>1 else 0
         bought[id_] = int(np.maximum(-ddem, 0).sum(skipna=True)) if len(df)>1 else 0
         idx = df["ts"].searchsorted(since_trend, side="left")
@@ -267,12 +288,13 @@ def fetch_metrics_for_ids(ids, hours_window=24, trend_hours=1):
         dDem[id_] = dem_now - dem_t
     return sold, bought, dSup, dDem
 
+
 def fetch_timeseries_for_id(item_id: int, hours_window: int) -> pd.DataFrame:
     with db_connect() as conn:
         since = int(time.time()) - hours_window * 3600
         cur = conn.execute(
             "SELECT ts, buy, sell, supply, demand FROM snapshots WHERE id = ? AND ts >= ? ORDER BY ts",
-            (int(item_id), since)
+            (int(item_id), since),
         )
         rows = cur.fetchall()
     if not rows:
@@ -281,740 +303,192 @@ def fetch_timeseries_for_id(item_id: int, hours_window: int) -> pd.DataFrame:
     df["dt"] = pd.to_datetime(df["ts"], unit="s")
     return df
 
-# ---------- Page config ----------
-st.set_page_config(page_title=T("Flips Trading Post (source: GW2TP)"), layout="wide")
-st.caption(T("🛠️ escarbeille.4281 · Discord : escarmouche"))
-st.title(T("Flips Trading Post (source: GW2TP)"))
+# ========================= UI =========================
+st.set_page_config(
+    page_title=T("title"),
+    page_icon="📈",
+    layout="wide",
+)
 
-with st.sidebar:
-    # Sélecteur de langue
-    language_switcher()
-    st.divider()
+# ---- Header ----
+left, mid, right = st.columns([1.4, 1, 1])
+with left:
+    st.title(T("title"))
+    st.caption(T("byline"))
+with mid:
+    st.metric(T("last_update"), time.strftime("%Y-%m-%d %H:%M:%S"))
+with right:
+    st.write("")
+    cols = st.columns(len(LANG_FLAGS))
+    for i, (code, flag) in enumerate(LANG_FLAGS.items()):
+        if cols[i].button(flag, use_container_width=True):
+            st.session_state["lang"] = code
 
-    st.header(T("Actualisation"))
-    auto_refresh = st.checkbox(T("Auto-refresh"), value=True)
-    refresh_min = st.slider(T("Intervalle (minutes)"), 1, 30, 5)
-    st.caption(T("Un snapshot est enregistré à chaque refresh (5 min max par item)."))
-
-    # --- Budget (placé sous "Actualisation") ---
-    st.header(T("Optimisation d'achat"))
-    budget_gold = st.number_input(T("Budget (or, 0 = illimité)"), 0.0, 1e9, 0.0, 0.5, key="budget_top")
-    st.divider()
-
-    st.header(T("Filtres - Profits"))
-    min_profit = st.number_input(T("Profit net min (or)"), 0.0, 1e6, 1.0, 0.5)
-    max_profit = st.number_input(T("Profit net max (or, 0 = illimité)"), 0.0, 1e6, 0.0, 0.5)
-    min_roi = st.number_input(T("ROI min (%)"), 0.0, 1000.0, 10.0, 1.0)
-
-    # --- Nettoyage / Outliers ---
-    st.header(T("Nettoyage / Outliers"))
-    min_buy_copper_filter = st.number_input(
-        T("Ignorer si prix d'achat < (cuivre)"), 0, 10_000, 10, 1
-    )
-    exclude_neg_roi = st.checkbox(T("Exclure ROI négatifs"), value=False)
-    roi_cap_manual = st.number_input(T("Seuil ROI max (%) (0 = auto)"), 0.0, 1_000_000.0, 0.0, 10.0)
-
-    outlier_modes_fr = ["IQR (1.5×)", "Percentile 99.5%"]
-    outlier_modes_display = [T(x) for x in outlier_modes_fr]
-    outlier_choice_display = st.selectbox(
-        T("Méthode auto des outliers (si ROI max = 0)"),
-        outlier_modes_display, index=0
-    )
-    outlier_choice_fr = outlier_modes_fr[outlier_modes_display.index(outlier_choice_display)]
-
-    st.header(T("Volume"))
-    min_quantity_user = st.number_input(T("Quantité min (min(demand, supply))"), 0, 10_000_000, 10, 5)
-    max_quantity_user = st.number_input(T("Quantité max (min(demand, supply), 0 = illimité)"), 0, 10_000_000, 0, 5)
-    min_sold = st.number_input(T("Ventes min sur la période"), 0, 10_000_000, 0, 100)
-
-    st.header(T("Prix (or)"))
-    min_buy = st.number_input(T("Prix d'achat minimum"), 0.0, 1e9, 0.0, 0.5)
-    max_buy = st.number_input(T("Prix d'achat maximum (0 = illimité)"), 0.0, 1e9, 0.0, 0.5)
-    min_sell = st.number_input(T("Prix de vente min (net)"), 0.0, 1e9, 0.0, 0.5)
-    max_sell = st.number_input(T("Prix de vente max (net, 0 = illimité)"), 0.0, 1e9, 0.0, 0.5)
-
-    st.header(T("Nom / Cache"))
-    name_query = st.text_input(T("Recherche par nom (contient)"), "")
-    cache_ttl = st.slider(T("Durée du cache (sec)"), 60, 1800, 300, 30)
-
-    st.header(T("Stratégie"))
-    strategy_options_fr = ["Personnalisé", "Prudent", "Équilibré", "Agressif"]
-    strategy_options_display = [T(x) for x in strategy_options_fr]
-    strategy_choice_display = st.selectbox(T("Preset"), strategy_options_display, 0)
-    strategy_choice_fr = strategy_options_fr[strategy_options_display.index(strategy_choice_display)]
-    risk_slider = st.slider(T("Profil de risque (0 = prudent, 100 = agressif)"), 0, 100, 40)
-
-    st.header(T("Historique en local"))
-    st.caption(T("Snapshots 5 min → estimations (période) + tendances."))
-    show_history = st.checkbox(T("Activer le suivi (SQLite local)"), value=False)
-    hist_hours = st.slider(T("Durée d'analyse (heures)"), 1, 168, 24, 1)
-    trend_hours = st.slider(T("Fenêtre tendance ΔSupply/Demand (heures)"), 1, 48, 1, 1)
-    log_scale_od = st.checkbox(T("Échelle logarithmique (graphe Offre/Demande)"), value=False)
-
-    # --------- OPTI : contrôles (sans budget ici) ---------
-    st.subheader(T("Optimisation d'achat"))
-    horizon_sell_h = st.slider(T("Horizon de revente (heures)"), 1, 168, 24, 1)
-    safety_pct = st.slider(T("Marge de sécurité (%)"), 10, 100, 60, 5)
-
-# Auto-refresh
-if auto_refresh:
-    st_autorefresh(interval=refresh_min * 60 * 1000, key="auto_refresh_key")
-
-st.caption(T("Dernière mise à jour : ") + time.strftime("%Y-%m-%d %H:%M:%S"))
-PRESET_TO_RISK = {"Prudent": 20, "Équilibré": 50, "Agressif": 80}
-risk_level = PRESET_TO_RISK.get(strategy_choice_fr, risk_slider)
-
-# ---------- Conversions ----------
-def gsc_emoji_from_copper(copper_value: int) -> str:
-    sign = "-" if copper_value < 0 else ""
-    c = abs(int(round(copper_value)))
-    g = c // 10000; s = (c % 10000) // 100; cc = c % 100
-    parts = []
-    if g > 0: parts.append(f"{g}{EMO_G}")
-    if s > 0 or g > 0: parts.append(f"{s}{EMO_S}")
-    parts.append(f"{cc}{EMO_C}")
-    return sign + " ".join(parts)
-
-def make_session() -> requests.Session:
-    return SESSION
-
-def make_item_chat_code(item_id: int, qty: int = 1) -> str:
-    q = max(1, min(255, int(qty)))
-    data = bytearray([0x02, q]) + struct.pack("<I", int(item_id)) + bytearray([0x00])
-    return "[&" + base64.b64encode(bytes(data)).decode("ascii") + "]"
-
-# ---------- Fetchers ----------
-@st.cache_data(ttl=300, show_spinner=False)
-def fetch_bulk_items():
-    for url in (GW2TP_BULK_ITEMS, GW2TP_BULK_ITEMS.replace("https://", "http://")):
-        resp = SESSION.get(url, timeout=TIMEOUT)
-        if resp.ok:
-            obj = resp.json()
-            return pd.DataFrame(obj.get("items", []), columns=obj.get("columns", []))
-    return pd.DataFrame(columns=["id","buy","sell","supply","demand"])
-
-@st.cache_data(ttl=300, show_spinner=False)
-def fetch_item_names():
-    for url in (GW2TP_BULK_NAMES, GW2TP_BULK_NAMES.replace("https://", "http://")):
-        resp = SESSION.get(url, timeout=TIMEOUT)
-        if resp.ok:
-            items = resp.json().get("items", [])
-            return {int(i[0]): i[1] for i in items if len(i) >= 2}
-    return {}
-
-# ---------- Build dataset ----------
-def build_flips_df(df_bulk: pd.DataFrame, id2name: dict):
-    if df_bulk.empty:
-        return pd.DataFrame(columns=[
-            "Nom","ID","Prix Achat (PO)","Prix Vente Net (PO)","Profit Net (PO)","ROI (%)",
-            "Quantité (min)","Supply","Demand","ChatCode",
-            "Prix Achat (c)","Prix Vente Net (c)","Profit Net (c)",
-            "Prix Achat (gsc)","Prix Vente Net (gsc)","Profit Net (gsc)"
-        ])
-    df = df_bulk.copy()
-    df["Nom"] = df["id"].map(id2name).fillna("")
-    df["Prix Achat (c)"] = df["buy"].astype("Int64")
-    df["Prix Vente Net (c)"] = (df["sell"] * TP_NET).round().astype("Int64")
-    df["Profit Net (c)"] = (df["Prix Vente Net (c)"] - df["Prix Achat (c)"]).astype("Int64")
-    df["Prix Achat (gsc)"] = df["Prix Achat (c)"].fillna(0).astype(int).apply(gsc_emoji_from_copper)
-    df["Prix Vente Net (gsc)"] = df["Prix Vente Net (c)"].fillna(0).astype(int).apply(gsc_emoji_from_copper)
-    df["Profit Net (gsc)"] = df["Profit Net (c)"].fillna(0).astype(int).apply(gsc_emoji_from_copper)
-    df["Prix Achat (PO)"] = (df["Prix Achat (c)"] / 10000.0).round(2)
-    df["Prix Vente Net (PO)"] = (df["Prix Vente Net (c)"] / 10000.0).round(2)
-    df["Profit Net (PO)"] = (df["Profit Net (c)"] / 10000.0).round(2)
-
-    # --- ROI robuste (évite divisions par ~0, inf et NaN) ---
-    buy_po = df["Prix Achat (PO)"].replace(0, np.nan)
-    df["ROI (%)"] = ((df["Profit Net (PO)"] / buy_po) * 100) \
-        .replace([np.inf, -np.inf], np.nan).fillna(0).round(2)
-
-    df["Quantité (min)"] = df[["supply","demand"]].min(axis=1).fillna(0).astype(int)
-    df["ChatCode"] = df["id"].apply(lambda x: make_item_chat_code(int(x)))
-    df.rename(columns={"id":"ID","supply":"Supply","demand":"Demand"}, inplace=True)
-    return df[[
-        "Nom","ID","Prix Achat (PO)","Prix Vente Net (PO)","Profit Net (PO)","ROI (%)",
-        "Quantité (min)","Supply","Demand","ChatCode",
-        "Prix Achat (c)","Prix Vente Net (c)","Profit Net (c)",
-        "Prix Achat (gsc)","Prix Vente Net (gsc)","Profit Net (gsc)"
-    ]]
-
-@st.cache_data(ttl=300, show_spinner=False)
-def get_bulk_and_df():
-    bulk = fetch_bulk_items()
-    names = fetch_item_names()
-    return bulk, build_flips_df(bulk, names)
-
-# ---------- Risk ----------
-def add_risk_score(df, risk_level):
-    if df.empty: return df
-    w_roi = risk_level / 100.0; w_vol = 1 - w_roi
-    roi = df["ROI (%)"].clip(lower=0).fillna(0)
-    vol = np.log10(df["Quantité (min)"].fillna(0) + 1)
-    def norm(s): return (s - s.min()) / (s.max() - s.min()) if s.max() > s.min() else s*0
-    df["Score"] = (w_roi * norm(roi) + w_vol * norm(vol)).round(3)
-    return df
-
-# ============================= RUN =============================
+# ---- Chargement données ----
 bulk, df_all = get_bulk_and_df()
 
-# Enregistrement snapshot si historique activé
-if show_history:
-    try: persist_snapshot(bulk)
-    except Exception as e: st.warning(T("Erreur enregistrement historique : ") + str(e))
+# ---- Barre d'actions rapides ----
+a1, a2, a3, a4 = st.columns([1, 1, 1, 2])
+with a1:
+    auto_refresh = st.toggle(T("refresh"), value=True)
+with a2:
+    refresh_min = st.slider(T("interval"), 1, 30, 5)
+with a3:
+    preset = st.selectbox(T("preset"), [T("custom"), T("cautious"), T("balanced"), T("aggressive")], index=2)
+with a4:
+    search_name = st.text_input(T("search"), "", placeholder="rune, inscription, ecto…")
 
-# Filtrage principal
-mask = (df_all["Profit Net (PO)"] >= min_profit) & (df_all["ROI (%)"] >= min_roi)
+# ---- Essentiels & filtres ----
+with st.expander(T("essentials"), expanded=True):
+    c1, c2, c3, c4, c5 = st.columns([1, 1, 1, 1, 1])
+    with c1:
+        budget_gold = st.number_input(T("budget"), 0.0, 1e9, 0.0, 0.5)
+    with c2:
+        min_profit = st.number_input(T("min_profit"), 0.0, 1e6, 1.0, 0.5)
+    with c3:
+        min_roi = st.number_input(T("min_roi"), 0.0, 1000.0, 10.0, 1.0)
+    with c4:
+        min_qty = st.number_input(T("min_qty"), 0, 10_000_000, 10, 5)
+    with c5:
+        risk_slider = st.slider(T("risk"), 0, 100, 50)
+
+# Preset → risk
+_preset_map = {T("cautious"): 20, T("balanced"): 50, T("aggressive"): 80}
+if preset in _preset_map:
+    risk_level = _preset_map[preset]
+else:
+    risk_level = risk_slider
+
+# ---- Avancé ----
+with st.expander(T("filters"), expanded=False):
+    c1, c2, c3 = st.columns(3)
+    with c1:
+        max_profit = st.number_input("Max profit (g, 0 = ∞)", 0.0, 1e9, 0.0, 0.5)
+    with c2:
+        min_buy = st.number_input("Min buy (g)", 0.0, 1e9, 0.0, 0.5)
+    with c3:
+        max_buy = st.number_input("Max buy (g, 0 = ∞)", 0.0, 1e9, 0.0, 0.5)
+
+# ---- Historique & optimisation ----
+hist_tab, trend_tab = st.columns([1, 1])
+with hist_tab:
+    enable_history = st.checkbox(T("history_enable"), value=False)
+    hist_hours = st.slider(T("history_window"), 1, 168, 24, 1)
+    trend_hours = st.slider(T("trend_window"), 1, 48, 1, 1)
+with trend_tab:
+    st.subheader(T("optimized"))
+    horizon_h = st.slider(T("horizon"), 1, 168, 24, 1)
+    safety_pct = st.slider(T("safety"), 10, 100, 60, 5)
+
+# ---- Auto refresh (Streamlit native) ----
+if auto_refresh:
+    try:
+        from streamlit_autorefresh import st_autorefresh
+        st_autorefresh(interval=refresh_min * 60 * 1000, key="auto_refresh_key_v2")
+    except Exception:
+        pass
+
+# ========================= Pipeline =========================
+# Filtrage de base
+mask = (df_all["Profit Net (PO)"] >= min_profit) & (df_all["ROI (%)"] >= min_roi) & (df_all["Quantité (min)"] >= min_qty)
 if max_profit > 0: mask &= df_all["Profit Net (PO)"] <= max_profit
-mask &= df_all["Quantité (min)"] >= min_quantity_user
-if max_quantity_user > 0: mask &= df_all["Quantité (min)"] <= max_quantity_user
 if min_buy > 0: mask &= df_all["Prix Achat (PO)"] >= min_buy
 if max_buy > 0: mask &= df_all["Prix Achat (PO)"] <= max_buy
-if min_sell > 0: mask &= df_all["Prix Vente Net (PO)"] >= min_sell
-if max_sell > 0: mask &= df_all["Prix Vente Net (PO)"] <= max_sell
-if name_query: mask &= df_all["Nom"].str.lower().str.contains(name_query.lower(), na=False)
-df_all = df_all[mask].reset_index(drop=True)
+if search_name: mask &= df_all["Nom"].str.contains(search_name, case=False, na=False)
 
-# --- Nettoyage / Outliers (après filtrage de base, avant score/tri) ---
-if not df_all.empty:
-    # 1) Ignorer les achats quasi nuls (en cuivre)
-    df_all = df_all[df_all["Prix Achat (c)"].fillna(0) >= int(min_buy_copper_filter)]
+view = df_all[mask].reset_index(drop=True)
 
-    # 2) Retirer profits impossibles (vente nette <= achat)
-    df_all = df_all[df_all["Prix Vente Net (c)"] > df_all["Prix Achat (c)"]]
+# Historique : snapshot + métriques
+if enable_history:
+    try:
+        persist_snapshot(bulk)
+    except Exception as e:
+        st.warning("History error: " + str(e))
 
-    # 3) Option: exclure ROI négatifs
-    if exclude_neg_roi:
-        df_all = df_all[df_all["ROI (%)"] >= 0]
+    if not view.empty:
+        ids = view["ID"].tolist()
+        sold, bought, dSup, dDem = fetch_metrics_for_ids(ids, hist_hours, trend_hours)
+        view["Vendu période"] = view["ID"].map(lambda i: sold.get(i, 0)).astype(int)
+        view["Acheté période"] = view["ID"].map(lambda i: bought.get(i, 0)).astype(int)
+        view["ΔSupply"] = view["ID"].map(lambda i: dSup.get(i, 0)).astype(int)
+        view["ΔDemand"] = view["ID"].map(lambda i: dDem.get(i, 0)).astype(int)
 
-    # 4) Plafonner / couper les ROI excessifs
-    if roi_cap_manual > 0:
-        df_all = df_all[df_all["ROI (%)"] <= roi_cap_manual]
+# Score & tri par défaut
+view = add_risk_score(view, risk_level)
+view = view.sort_values(["Score","Profit Net (PO)"], ascending=[False, False])
+
+# Optimisation
+if not view.empty:
+    qty_opt, profit_opt_c = [], []
+    for _, r in view.iterrows():
+        sold_period = int(r.get("Vendu période", 0)) if enable_history else None
+        q, p_c = compute_optimal_qty(r, budget_gold, horizon_h, safety_pct, hist_hours, sold_period)
+        qty_opt.append(int(q)); profit_opt_c.append(int(p_c))
+    view["Qté optimisée"] = qty_opt
+    view["Profit net optimisé (c)"] = profit_opt_c
+    view["Profit net optimisé (PO)"] = (view["Profit net optimisé (c)"] / 10000.0).round(2)
+
+# ========================= Tabs =========================
+TAB1, TAB2, TAB3, TAB4 = st.tabs([T("tab_flips"), T("tab_history"), T("tab_advanced"), T("tab_about")])
+
+with TAB1:
+    st.subheader("KPIs")
+    k1, k2, k3, k4 = st.columns(4)
+    with k1:
+        st.metric("Items", f"{len(view):,}")
+    with k2:
+        st.metric("Top Profit (g)", f"{(view['Profit Net (PO)'].max() if not view.empty else 0):,.2f}")
+    with k3:
+        st.metric("Top ROI (%)", f"{(view['ROI (%)'].max() if not view.empty else 0):,.2f}")
+    with k4:
+        st.metric("Profit optimisé (g)", f"{(view['Profit net optimisé (PO)'].sum() if 'Profit net optimisé (PO)' in view else 0):,.2f}")
+
+    if view.empty:
+        st.info(T("no_rows"))
     else:
-        roi_series = df_all["ROI (%)"].astype(float)
-        if outlier_choice_fr.startswith("IQR"):
-            q1, q3 = roi_series.quantile(0.25), roi_series.quantile(0.75)
-            iqr = (q3 - q1) if pd.notna(q3) and pd.notna(q1) else 0.0
-            if iqr > 0:
-                max_auto = q3 + 1.5 * iqr
-                df_all = df_all[roi_series <= max_auto]
-        else:
-            p995 = roi_series.quantile(0.995)
-            if pd.notna(p995):
-                df_all = df_all[roi_series <= p995]
+        # Vue compacte/détaillée
+        compact = st.toggle("Compact", value=True)
+        cols_compact = [
+            "Nom","Profit Net (gsc)","ROI (%)","Prix Achat (PO)","Prix Vente Net (PO)",
+            "Quantité (min)","Supply","Demand","Qté optimisée","Profit net optimisé (PO)","ID","ChatCode"
+        ]
+        cols_full = cols_compact + ["ΔSupply","ΔDemand","Vendu période","Acheté période"] if enable_history else cols_compact
+        cols = cols_compact if compact else cols_full
 
-# Historique (ventes cumulées & tendances)
-if show_history and not df_all.empty:
-    ids = df_all["ID"].tolist()
-    sold, bought, dSup, dDem = fetch_metrics_for_ids(ids, hist_hours, trend_hours)
-    df_all["Vendu période"] = df_all["ID"].map(lambda i: sold.get(i, 0)).astype(int)
-    df_all["Acheté période"] = df_all["ID"].map(lambda i: bought.get(i, 0)).astype(int)
-    df_all["ΔSupply"] = df_all["ID"].map(lambda i: dSup.get(i, 0)).astype(int)
-    df_all["ΔDemand"] = df_all["ID"].map(lambda i: dDem.get(i, 0)).astype(int)
-    if min_sold > 0:
-        df_all = df_all[df_all["Vendu période"] >= min_sold].reset_index(drop=True)
+        # Formatage
+        df_disp = view[cols].copy()
+        # Télécharger CSV
+        st.download_button(T("download_csv"), data=df_disp.to_csv(index=False), file_name="flips_gw2tp_v2.csv", mime="text/csv")
 
-# Score & tri
-df_all = add_risk_score(df_all, risk_level)
-df_all = df_all.sort_values(["Score","Profit Net (PO)"], ascending=[False,False])
+        # Tableau interactif
+        st.dataframe(
+            df_disp,
+            use_container_width=True,
+            hide_index=True,
+        )
 
-# --------- OPTI : quantité/profit optimisés ---------
-def compute_optimal_qty(row, budget_gold, horizon_sell_h, safety_pct, show_history_flag):
-    buy_c = int(row["Prix Achat (c)"]) if pd.notna(row["Prix Achat (c)"]) else 0
-    profit_c = int(row["Profit Net (c)"]) if pd.notna(row["Profit Net (c)"]) else 0
-    if buy_c <= 0 or profit_c <= 0:
-        return 0, 0
+        # Graphique Top 20 par profit
+        st.subheader("Top 20 — Profit Net (g)")
+        top20 = view.sort_values("Profit Net (PO)", ascending=False).head(20)
+        if not top20.empty:
+            fig, ax = plt.subplots(figsize=(11,5))
+            ax.bar(range(len(top20)), top20["Profit Net (PO)"])
+            ax.set_xticks(range(len(top20)))
+            ax.set_xticklabels(top20["Nom"], rotation=45, ha="right")
+            ax.set_ylabel("g")
+            st.pyplot(fig, clear_figure=True)
 
-    supply = int(row["Supply"]) if pd.notna(row["Supply"]) else 0
-    demand = int(row["Demand"]) if pd.notna(row["Demand"]) else 0
-
-    # Capacité budget (0 = illimité)
-    if budget_gold and budget_gold > 0:
-        budget_c = int(round(budget_gold * 10000))
-        cap_budget = budget_c // buy_c
+with TAB2:
+    st.caption("Visualise l'historique d'un item (si suivi activé)")
+    if not enable_history:
+        st.info("Active l'historique dans les réglages au-dessus.")
     else:
-        cap_budget = 10**9
-    cap_budget = max(0, cap_budget)
-
-    # Capacité de revente
-    if show_history_flag and "Vendu période" in row and hist_hours > 0:
-        sold_rate_per_h = max(0.0, float(row["Vendu période"])) / float(hist_hours)
-        sell_capacity = int(sold_rate_per_h * float(horizon_sell_h))
-    else:
-        sell_capacity = int(demand)
-
-    # Marge de sécurité
-    sell_capacity = int(sell_capacity * (max(10, min(100, safety_pct)) / 100.0))
-
-    qty = max(0, min(supply, sell_capacity, cap_budget))
-    total_profit_c = qty * profit_c
-    return qty, total_profit_c
-
-if not df_all.empty:
-    qopts, popts_c = [], []
-    for _, r in df_all.iterrows():
-        q, p_c = compute_optimal_qty(r, budget_gold, horizon_sell_h, safety_pct, show_history)
-        qopts.append(int(q)); popts_c.append(int(p_c))
-    df_all["Qté optimisée"] = qopts
-    df_all["Profit net optimisé (c)"] = popts_c
-    df_all["Profit net optimisé (PO)"] = (df_all["Profit net optimisé (c)"] / 10000.0).round(2)
-    df_all["Profit net optimisé (gsc)"] = df_all["Profit net optimisé (c)"].fillna(0).astype(int).apply(gsc_emoji_from_copper)
-
-# ---------- Display ----------
-if df_all.empty:
-    st.warning(T("Aucun flip avec ces filtres."))
-else:
-    st.caption(f"{len(df_all):,} {T('objets — période historique : ')}{hist_hours} h{T(' | ΔSupply/Demand : ')}{trend_hours} h")
-
-    # ----- Table lisible g/s/c avec copier + scroll -----
-    st.subheader(T("Affichage prix (g/s/c)"))
-    if not df_all.empty:
-        max_rows_emo = st.slider(T("Lignes à afficher (prix g/s/c)"), 10, 500, 100, 10)
-        view_gsc = df_all.head(max_rows_emo)[[
-            "Nom","Profit Net (gsc)","ROI (%)","Prix Achat (gsc)","Prix Vente Net (gsc)",
-            "Quantité (min)","Supply","Demand","Qté optimisée","Profit net optimisé (gsc)","ID","ChatCode"
-        ]].rename(columns={
-            "Nom": T("Nom"),
-            "Profit Net (gsc)": T("Profit Net"),
-            "ROI (%)": T("ROI (%)"),
-            "Prix Achat (gsc)": T("Prix Achat"),
-            "Prix Vente Net (gsc)": T("Vente nette (85%)"),
-            "Quantité (min)": T("Quantité (min)"),
-            "Supply": T("Supply"),
-            "Demand": T("Demand"),
-            "Qté optimisée": T("Qté optimisée"),
-            "Profit net optimisé (gsc)": T("Profit net optimisé"),
-            "ID": T("ID"),
-            "ChatCode": T("ChatCode"),
-        })
-
-        view_raw = df_all.head(max_rows_emo)[[
-            "Profit Net (c)","Prix Achat (c)","Prix Vente Net (c)","ROI (%)",
-            "Quantité (min)","Supply","Demand","Qté optimisée","Profit net optimisé (c)","ID"
-        ]]
-
-        records = []
-        for disp_row, raw_row in zip(view_gsc.to_dict("records"), view_raw.to_dict("records")):
-            rec = dict(disp_row)
-            rec["_profit_c"] = int(raw_row["Profit Net (c)"]) if pd.notna(raw_row["Profit Net (c)"]) else 0
-            rec["_buy_c"]    = int(raw_row["Prix Achat (c)"])   if pd.notna(raw_row["Prix Achat (c)"])   else 0
-            rec["_sell_c"]   = int(raw_row["Prix Vente Net (c)"]) if pd.notna(raw_row["Prix Vente Net (c)"]) else 0
-            rec["_roi"]      = float(raw_row["ROI (%)"]) if pd.notna(raw_row["ROI (%)"]) else 0.0
-            rec["_qmin"]     = int(raw_row["Quantité (min)"]) if pd.notna(raw_row["Quantité (min)"]) else 0
-            rec["_supply"]   = int(raw_row["Supply"]) if pd.notna(raw_row["Supply"]) else 0
-            rec["_demand"]   = int(raw_row["Demand"]) if pd.notna(raw_row["Demand"]) else 0
-            rec["_qopt"]     = int(raw_row["Qté optimisée"]) if pd.notna(raw_row["Qté optimisée"]) else 0
-            rec["_popt_c"]   = int(raw_row["Profit net optimisé (c)"]) if pd.notna(raw_row["Profit net optimisé (c)"]) else 0
-            rec["_id"]       = int(raw_row["ID"]) if pd.notna(raw_row["ID"]) else 0
-            records.append(rec)
-
-        items_json2 = json.dumps(records, ensure_ascii=True)
-
-        keys = {
-            "NAME": T("Nom"),
-            "PROFIT": T("Profit Net"),
-            "ROI": T("ROI (%)"),
-            "BUY": T("Prix Achat"),
-            "SELL": T("Vente nette (85%)"),
-            "QMIN": T("Quantité (min)"),
-            "SUP": T("Supply"),
-            "DEM": T("Demand"),
-            "QOPT": T("Qté optimisée"),
-            "POPT": T("Profit net optimisé"),
-            "ID": T("ID"),
-            "CODE": T("ChatCode"),
-            "COPY": T("Copier"),
-        }
-        keys_json = json.dumps(keys, ensure_ascii=False)
-
-        components.html(f'''
-        <style>
-          .gsc-frame {{ font-family: system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif; border:1px solid #e5e7eb;border-radius:10px;overflow:hidden; }}
-          .gsc-scroller {{ max-height: 620px; overflow-y: auto; }}
-          .gsc-head, .gsc-row {{
-            display:grid;
-            /* 13 colonnes */
-            grid-template-columns: 1.5fr 0.9fr 0.7fr 1.0fr 1.0fr 0.9fr 0.8fr 0.8fr 0.9fr 1.1fr 0.7fr 1.2fr 0.8fr;
-            gap:8px; align-items:center;
-          }}
-          .gsc-head {{ position: sticky; top: 0; z-index: 5; background:#f8fafc; padding:10px 12px; font-weight:600; border-bottom:1px solid #eef2f7 }}
-          .gsc-head button {{ all:unset; cursor:pointer; display:flex; align-items:center; gap:6px; }}
-          .gsc-head .arrow {{ font-size:12px; color:#6b7280 }}
-          .gsc-row {{ padding:10px 12px; border-bottom:1px dashed #eef2f7; background:#fff }}
-          .gsc-row:nth-child(odd) {{ background:#fcfcfd }}
-          .gsc-row:last-child {{ border-bottom:none }}
-          .gsc-code {{ cursor:pointer;background:#f3f4f6;padding:3px 6px;border-radius:6px; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; white-space:nowrap; overflow:hidden; text-overflow:ellipsis }}
-          .gsc-code.ok {{ background:#dcfce7 }}
-          .gsc-btn {{ padding:6px 10px;border-radius:8px;border:1px solid #d1d5db;background:#fff;cursor:pointer;white-space:nowrap }}
-          .gsc-btn:hover {{ background:#f9fafb }}
-          .gsc-muted {{ color:#6b7280 }}
-          .gsc-title {{ white-space:nowrap; overflow:hidden; text-overflow:ellipsis }}
-        </style>
-
-        <div class="gsc-frame">
-          <div class="gsc-scroller" id="gsc-scroll">
-            <div class="gsc-head" id="gsc-head">
-              <button data-key="name"><span>{T("Nom")}</span><span class="arrow" id="arr-name"></span></button>
-              <button data-key="profit"><span>{T("Profit Net")}</span><span class="arrow" id="arr-profit"></span></button>
-              <button data-key="roi"><span>{T("ROI (%)")}</span><span class="arrow" id="arr-roi"></span></button>
-              <button data-key="buy"><span>{T("Prix Achat")}</span><span class="arrow" id="arr-buy"></span></button>
-              <button data-key="sell"><span>{T("Vente nette (85%)")}</span><span class="arrow" id="arr-sell"></span></button>
-              <button data-key="qmin"><span>{T("Quantité (min)")}</span><span class="arrow" id="arr-qmin"></span></button>
-              <button data-key="supply"><span>{T("Supply")}</span><span class="arrow" id="arr-supply"></span></button>
-              <button data-key="demand"><span>{T("Demand")}</span><span class="arrow" id="arr-demand"></span></button>
-              <button data-key="qopt"><span>{T("Qté optimisée")}</span><span class="arrow" id="arr-qopt"></span></button>
-              <button data-key="popt"><span>{T("Profit net optimisé")}</span><span class="arrow" id="arr-popt"></span></button>
-              <button data-key="id"><span>{T("ID")}</span><span class="arrow" id="arr-id"></span></button>
-              <div>{T("ChatCode")}</div>
-              <div class="gsc-muted">{T("Copier")}</div>
-            </div>
-            <div id="gsc-list"></div>
-          </div>
-        </div>
-
-        <script>
-          const rows = {items_json2};
-          const K = {keys_json};
-          const list = document.getElementById('gsc-list');
-          const head = document.getElementById('gsc-head');
-          const arrows = {{
-            name: document.getElementById('arr-name'),
-            profit: document.getElementById('arr-profit'),
-            roi: document.getElementById('arr-roi'),
-            buy: document.getElementById('arr-buy'),
-            sell: document.getElementById('arr-sell'),
-            qmin: document.getElementById('arr-qmin'),
-            supply: document.getElementById('arr-supply'),
-            demand: document.getElementById('arr-demand'),
-            qopt: document.getElementById('arr-qopt'),
-            popt: document.getElementById('arr-popt'),
-            id: document.getElementById('arr-id'),
-          }};
-          let sortKey = 'popt';
-          let sortDir = 'desc';
-
-          function copyText(txt, el) {{
-            if (navigator.clipboard) navigator.clipboard.writeText(txt);
-            el.classList.add('ok'); setTimeout(()=>el.classList.remove('ok'), 700);
-          }}
-
-          function render(data) {{
-            list.innerHTML = '';
-            data.forEach(r => {{
-              const row = document.createElement('div'); row.className = 'gsc-row';
-              const c = (txt, cls='') => {{ const d=document.createElement('div'); d.className = cls; d.textContent = txt; return d; }};
-              const code = document.createElement('code'); code.className = 'gsc-code'; code.textContent = r[K.CODE];
-              code.title = 'Click to copy'; code.onclick = () => copyText(r[K.CODE], code);
-              const btn = document.createElement('button'); btn.className='gsc-btn'; btn.textContent = K.COPY;
-              btn.onclick = () => copyText(r[K.CODE], code);
-
-              row.appendChild(c(r[K.NAME], 'gsc-title'));
-              row.appendChild(c(r[K.PROFIT]));
-              row.appendChild(c(r[K.ROI]));
-              row.appendChild(c(r[K.BUY]));
-              row.appendChild(c(r[K.SELL]));
-              row.appendChild(c(String(r[K.QMIN])));
-              row.appendChild(c(String(r[K.SUP])));
-              row.appendChild(c(String(r[K.DEM])));
-              row.appendChild(c(String(r[K.QOPT])));
-              row.appendChild(c(r[K.POPT]));
-              row.appendChild(c(String(r[K.ID])));
-              row.appendChild(code);
-              row.appendChild(btn);
-              list.appendChild(row);
-            }});
-          }}
-
-          function cmp(a, b, key) {{
-            if (key === 'name') return (a[K.NAME] || '').localeCompare(b[K.NAME] || '', undefined, {{sensitivity:'base'}});
-            if (key === 'profit') return (a._profit_c||0) - (b._profit_c||0);
-            if (key === 'buy')    return (a._buy_c||0)    - (b._buy_c||0);
-            if (key === 'sell')   return (a._sell_c||0)   - (b._sell_c||0);
-            if (key === 'roi')    return (a._roi||0)      - (b._roi||0);
-            if (key === 'qmin')   return (a._qmin||0)     - (b._qmin||0);
-            if (key === 'supply') return (a._supply||0)   - (b._supply||0);
-            if (key === 'demand') return (a._demand||0)   - (b._demand||0);
-            if (key === 'qopt')   return (a._qopt||0)     - (b._qopt||0);
-            if (key === 'popt')   return (a._popt_c||0)   - (b._popt_c||0);
-            if (key === 'id')     return (a._id||0)       - (b._id||0);
-            return 0;
-          }}
-
-          function updateArrows() {{
-            Object.values(arrows).forEach(el => el.textContent = '');
-            const arrow = sortDir === 'asc' ? '↑' : '↓';
-            arrows[sortKey].textContent = arrow;
-          }}
-
-          function doSort(key) {{
-            if (sortKey === key) {{
-              sortDir = (sortDir === 'asc') ? 'desc' : 'asc';
-            }} else {{
-              sortKey = key;
-              sortDir = (key === 'name') ? 'asc' : 'desc';
-            }}
-            const data = [...rows].sort((a,b) => {{
-              const v = cmp(a,b,sortKey);
-              return sortDir === 'asc' ? v : -v;
-            }});
-            updateArrows();
-            render(data);
-          }}
-
-          head.querySelectorAll('button[data-key]').forEach(btn => {{
-            btn.addEventListener('click', () => doSort(btn.dataset.key));
-          }});
-
-          updateArrows();
-          render([...rows].sort((a,b) => -(cmp(a,b,sortKey))));
-        </script>
-        ''', height=680)
-
-    # ----- CSV (haut) -----
-    st.download_button(T("Télécharger CSV (résultats filtrés)"),
-        data=df_all.to_csv(index=False), file_name="flips_gw2tp.csv",
-        mime="text/csv", key="download_csv_top")
-
-    # ====== GRAPHE MEILLEURS ARTICLES ======
-    chart_options_fr = ["Profit Net (PO)", "Score (profil de risque)"]
-    chart_options_display = [T(x) for x in chart_options_fr]
-    chart_choice_display = st.radio(T("Métrique du graphique"), chart_options_display, index=0, horizontal=True)
-    chart_metric_fr = chart_options_fr[chart_options_display.index(chart_choice_display)]
-
-    if chart_metric_fr == "Profit Net (PO)":
-        st.subheader(T("Top 20 par Profit Net"))
-        top20 = df_all.sort_values("Profit Net (PO)", ascending=False).head(20)
-        fig, ax = plt.subplots(figsize=(11,5))
-        ax.bar(range(len(top20)), top20["Profit Net (PO)"])
-        ax.set_xticks(range(len(top20)))
-        ax.set_xticklabels(top20["Nom"], rotation=45, ha="right")
-        ax.set_ylabel(T("Profit Net (PO)"))
-        ax.set_title(T("Top 20 (GW2TP) — Profit Net"))
-        st.pyplot(fig, clear_figure=True)
-    else:
-        st.subheader(T("Top 20 par Score (profil de risque)"))
-        top20 = df_all.sort_values("Score", ascending=False).head(20)
-        fig, ax = plt.subplots(figsize=(11,5))
-        ax.bar(range(len(top20)), top20["Score"])
-        ax.set_xticks(range(len(top20)))
-        ax.set_xticklabels(top20["Nom"], rotation=45, ha="right")
-        ax.set_ylabel(T("Score"))
-        ax.set_title(T("Top 20 (GW2TP) — Score"))
-        st.pyplot(fig, clear_figure=True)
-
-    # ====== TABLEAU TOP 20 (triable) ======
-    if chart_metric_fr == "Profit Net (PO)":
-        top20_tbl = df_all.sort_values("Profit Net (PO)", ascending=False).head(20)
-        default_sort_key = "profit"   # tri initial sur profit
-        initial_key = "profit"
-    else:
-        top20_tbl = df_all.sort_values("Score", ascending=False).head(20)
-        default_sort_key = "popt"     # plus parlant à l'achat
-        initial_key = "popt"          # on peut mettre "score" si tu veux le score strict
-
-    view_gsc_top = top20_tbl[[
-        "Nom","Profit Net (gsc)","ROI (%)","Prix Achat (gsc)","Prix Vente Net (gsc)",
-        "Quantité (min)","Supply","Demand","Qté optimisée","Profit net optimisé (gsc)","ID","ChatCode"
-    ]].rename(columns={
-        "Nom": T("Nom"),
-        "Profit Net (gsc)": T("Profit Net"),
-        "ROI (%)": T("ROI (%)"),
-        "Prix Achat (gsc)": T("Prix Achat"),
-        "Prix Vente Net (gsc)": T("Vente nette (85%)"),
-        "Quantité (min)": T("Quantité (min)"),
-        "Supply": T("Supply"),
-        "Demand": T("Demand"),
-        "Qté optimisée": T("Qté optimisée"),
-        "Profit net optimisé (gsc)": T("Profit net optimisé"),
-        "ID": T("ID"),
-        "ChatCode": T("ChatCode"),
-    })
-
-    view_raw_top = top20_tbl[[
-        "Profit Net (c)","Prix Achat (c)","Prix Vente Net (c)","ROI (%)",
-        "Quantité (min)","Supply","Demand","Qté optimisée","Profit net optimisé (c)","ID","Score"
-    ]]
-
-    records_top = []
-    for disp_row, raw_row in zip(view_gsc_top.to_dict("records"), view_raw_top.to_dict("records")):
-        rec = dict(disp_row)
-        rec["_profit_c"] = int(raw_row["Profit Net (c)"]) if pd.notna(raw_row["Profit Net (c)"]) else 0
-        rec["_buy_c"]    = int(raw_row["Prix Achat (c)"]) if pd.notna(raw_row["Prix Achat (c)"]) else 0
-        rec["_sell_c"]   = int(raw_row["Prix Vente Net (c)"]) if pd.notna(raw_row["Prix Vente Net (c)"]) else 0
-        rec["_roi"]      = float(raw_row["ROI (%)"]) if pd.notna(raw_row["ROI (%)"]) else 0.0
-        rec["_qmin"]     = int(raw_row["Quantité (min)"]) if pd.notna(raw_row["Quantité (min)"]) else 0
-        rec["_supply"]   = int(raw_row["Supply"]) if pd.notna(raw_row["Supply"]) else 0
-        rec["_demand"]   = int(raw_row["Demand"]) if pd.notna(raw_row["Demand"]) else 0
-        rec["_qopt"]     = int(raw_row["Qté optimisée"]) if pd.notna(raw_row["Qté optimisée"]) else 0
-        rec["_popt_c"]   = int(raw_row["Profit net optimisé (c)"]) if pd.notna(raw_row["Profit net optimisé (c)"]) else 0
-        rec["_id"]       = int(raw_row["ID"]) if pd.notna(raw_row["ID"]) else 0
-        rec["_score"]    = float(raw_row["Score"]) if pd.notna(raw_row["Score"]) else 0.0
-        records_top.append(rec)
-
-    items_json_top20 = json.dumps(records_top, ensure_ascii=True)
-    # réutilise keys_json (déjà défini plus haut)
-
-    st.subheader(T("Top 20 par ") + (T("Profit Net (PO)") if chart_metric_fr == "Profit Net (PO)" else T("Score (profil de risque)")) + " — " + T("tableau"))
-    components.html(f'''
-    <style>
-      .t20-frame {{ font-family: system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif; border:1px solid #e5e7eb;border-radius:10px;overflow:hidden; margin-top:6px; }}
-      .t20-scroller {{ max-height: 520px; overflow-y: auto; }}
-      .t20-head, .t20-row {{
-        display:grid;
-        grid-template-columns: 1.5fr 0.9fr 0.7fr 1.0fr 1.0fr 0.9fr 0.8fr 0.8fr 0.9fr 1.1fr 0.7fr 1.2fr 0.8fr;
-        gap:8px; align-items:center;
-      }}
-      .t20-head {{ position: sticky; top: 0; z-index: 5; background:#f8fafc; padding:10px 12px; font-weight:600; border-bottom:1px solid #eef2f7 }}
-      .t20-head button {{ all:unset; cursor:pointer; display:flex; align-items:center; gap:6px; }}
-      .t20-head .arrow {{ font-size:12px; color:#6b7280 }}
-      .t20-row {{ padding:10px 12px; border-bottom:1px dashed #eef2f7; background:#fff }}
-      .t20-row:nth-child(odd) {{ background:#fcfcfd }}
-      .t20-row:last-child {{ border-bottom:none }}
-      .t20-code {{ cursor:pointer;background:#f3f4f6;padding:3px 6px;border-radius:6px; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; white-space:nowrap; overflow:hidden; text-overflow:ellipsis }}
-      .t20-code.ok {{ background:#dcfce7 }}
-      .t20-btn {{ padding:6px 10px;border-radius:8px;border:1px solid #d1d5db;background:#fff;cursor:pointer;white-space:nowrap }}
-      .t20-btn:hover {{ background:#f9fafb }}
-      .t20-title {{ white-space:nowrap; overflow:hidden; text-overflow:ellipsis }}
-    </style>
-
-    <div class="t20-frame">
-      <div class="t20-scroller" id="t20-scroll">
-        <div class="t20-head" id="t20-head">
-          <button data-key="name"><span>{T("Nom")}</span><span class="arrow" id="t20-arr-name"></span></button>
-          <button data-key="profit"><span>{T("Profit Net")}</span><span class="arrow" id="t20-arr-profit"></span></button>
-          <button data-key="roi"><span>{T("ROI (%)")}</span><span class="arrow" id="t20-arr-roi"></span></button>
-          <button data-key="buy"><span>{T("Prix Achat")}</span><span class="arrow" id="t20-arr-buy"></span></button>
-          <button data-key="sell"><span>{T("Vente nette (85%)")}</span><span class="arrow" id="t20-arr-sell"></span></button>
-          <button data-key="qmin"><span>{T("Quantité (min)")}</span><span class="arrow" id="t20-arr-qmin"></span></button>
-          <button data-key="supply"><span>{T("Supply")}</span><span class="arrow" id="t20-arr-supply"></span></button>
-          <button data-key="demand"><span>{T("Demand")}</span><span class="arrow" id="t20-arr-demand"></span></button>
-          <button data-key="qopt"><span>{T("Qté optimisée")}</span><span class="arrow" id="t20-arr-qopt"></span></button>
-          <button data-key="popt"><span>{T("Profit net optimisé")}</span><span class="arrow" id="t20-arr-popt"></span></button>
-          <button data-key="id"><span>{T("ID")}</span><span class="arrow" id="t20-arr-id"></span></button>
-          <div>{T("ChatCode")}</div>
-          <div>{T("Copier")}</div>
-        </div>
-        <div id="t20-list"></div>
-      </div>
-    </div>
-
-    <script>
-      const rows2 = {items_json_top20};
-      const K2 = {keys_json};
-      const list2 = document.getElementById('t20-list');
-      const head2 = document.getElementById('t20-head');
-      const arrows2 = {{
-        name: document.getElementById('t20-arr-name'),
-        profit: document.getElementById('t20-arr-profit'),
-        roi: document.getElementById('t20-arr-roi'),
-        buy: document.getElementById('t20-arr-buy'),
-        sell: document.getElementById('t20-arr-sell'),
-        qmin: document.getElementById('t20-arr-qmin'),
-        supply: document.getElementById('t20-arr-supply'),
-        demand: document.getElementById('t20-arr-demand'),
-        qopt: document.getElementById('t20-arr-qopt'),
-        popt: document.getElementById('t20-arr-popt'),
-        id: document.getElementById('t20-arr-id'),
-      }};
-      let sortKey2 = "{default_sort_key}";
-      let sortDir2 = (sortKey2 === 'name') ? 'asc' : 'desc';
-
-      function copyText2(txt, el) {{
-        if (navigator.clipboard) navigator.clipboard.writeText(txt);
-        el.classList.add('ok'); setTimeout(()=>el.classList.remove('ok'), 700);
-      }}
-
-      function render2(data) {{
-        list2.innerHTML = '';
-        data.forEach(r => {{
-          const row = document.createElement('div'); row.className = 't20-row';
-          const c = (txt, cls='') => {{ const d=document.createElement('div'); d.className = cls; d.textContent = txt; return d; }};
-          const code = document.createElement('code'); code.className = 't20-code'; code.textContent = r[K2.CODE];
-          code.title = 'Click to copy'; code.onclick = () => copyText2(r[K2.CODE], code);
-          const btn = document.createElement('button'); btn.className='t20-btn'; btn.textContent = K2.COPY;
-          btn.onclick = () => copyText2(r[K2.CODE], code);
-
-          row.appendChild(c(r[K2.NAME], 't20-title'));
-          row.appendChild(c(r[K2.PROFIT]));
-          row.appendChild(c(r[K2.ROI]));
-          row.appendChild(c(r[K2.BUY]));
-          row.appendChild(c(r[K2.SELL]));
-          row.appendChild(c(String(r[K2.QMIN])));
-          row.appendChild(c(String(r[K2.SUP])));
-          row.appendChild(c(String(r[K2.DEM])));
-          row.appendChild(c(String(r[K2.QOPT])));
-          row.appendChild(c(r[K2.POPT]));
-          row.appendChild(c(String(r[K2.ID])));
-          row.appendChild(code);
-          row.appendChild(btn);
-          list2.appendChild(row);
-        }});
-      }}
-
-      function cmp2(a, b, key) {{
-        if (key === 'name') return (a[K2.NAME] || '').localeCompare(b[K2.NAME] || '', undefined, {{sensitivity:'base'}});
-        if (key === 'profit') return (a._profit_c||0) - (b._profit_c||0);
-        if (key === 'buy')    return (a._buy_c||0)    - (b._buy_c||0);
-        if (key === 'sell')   return (a._sell_c||0)   - (b._sell_c||0);
-        if (key === 'roi')    return (a._roi||0)      - (b._roi||0);
-        if (key === 'qmin')   return (a._qmin||0)     - (b._qmin||0);
-        if (key === 'supply') return (a._supply||0)   - (b._supply||0);
-        if (key === 'demand') return (a._demand||0)   - (b._demand||0);
-        if (key === 'qopt')   return (a._qopt||0)     - (b._qopt||0);
-        if (key === 'popt')   return (a._popt_c||0)   - (b._popt_c||0);
-        if (key === 'id')     return (a._id||0)       - (b._id||0);
-        if (key === 'score')  return (a._score||0)    - (b._score||0);
-        return 0;
-      }}
-
-      function updateArrows2() {{
-        Object.values(arrows2).forEach(el => el.textContent = '');
-        const arrow = sortDir2 === 'asc' ? '↑' : '↓';
-        if (arrows2[sortKey2]) arrows2[sortKey2].textContent = arrow;
-      }}
-
-      function doSort2(key) {{
-        if (sortKey2 === key) {{
-          sortDir2 = (sortDir2 === 'asc') ? 'desc' : 'asc';
-        }} else {{
-          sortKey2 = key;
-          sortDir2 = (key === 'name') ? 'asc' : 'desc';
-        }}
-        const data = [...rows2].sort((a,b) => {{
-          const v = cmp2(a,b,sortKey2);
-          return sortDir2 === 'asc' ? v : -v;
-        }});
-        updateArrows2();
-        render2(data);
-      }}
-
-      head2.querySelectorAll('button[data-key]').forEach(btn => {{
-        btn.addEventListener('click', () => doSort2(btn.dataset.key));
-      }});
-
-      // Tri initial selon la métrique choisie
-      updateArrows2();
-      const initial2 = [...rows2].sort((a,b) => {{
-        const v = cmp2(a,b, "{initial_key}");
-        return sortDir2 === 'asc' ? v : -v;
-      }});
-      render2(initial2);
-    </script>
-    ''', height=600)
-
-    # ----- CSV (bas) -----
-    st.download_button(T("Télécharger CSV (résultats filtrés)"),
-        data=df_all.to_csv(index=False), file_name="flips_gw2tp.csv",
-        mime="text/csv", key="download_csv_bottom")
-
-    # ====== COURBES HISTORIQUES (si suivi activé) ======
-    if show_history:
-        st.subheader(T("Évolution Offre / Demande sur la période"))
-        options = df_all[["ID","Nom"]].copy()
+        options = view[["ID","Nom"]].copy() if not view.empty else df_all[["ID","Nom"]]
         if options.empty:
-            st.info(T("Aucun item à tracer."))
+            st.info("Aucun item disponible.")
         else:
             options["label"] = options.apply(lambda r: f"{r['Nom']} (ID {r['ID']})", axis=1)
-            choice = st.selectbox(T("Choisir un objet"), options["label"].tolist())
+            choice = st.selectbox("Choisir un objet", options["label"].tolist())
             try:
                 chosen_id = int(choice.rsplit("ID", 1)[1].strip(" )"))
             except Exception:
@@ -1022,25 +496,39 @@ else:
 
             ts_df = fetch_timeseries_for_id(chosen_id, hist_hours)
             if ts_df.empty or len(ts_df) < 2:
-                st.info(T("Pas encore assez d'historique pour tracer (laisse l'app tourner)."))
+                st.info("Pas encore assez d'historique pour tracer.")
             else:
+                # Offre/Demande
                 fig, ax = plt.subplots(figsize=(11, 4))
-                supply_series = ts_df["supply"].replace(0, np.nan)
-                demand_series = ts_df["demand"].replace(0, np.nan)
-                ax.plot(ts_df["dt"], supply_series, label=T("Supply"))
-                ax.plot(ts_df["dt"], demand_series, label=T("Demand"))
-                ax.set_xlabel(T("Temps")); ax.set_ylabel(T("Quantités"))
-                ax.set_title(f"{T('Offre / Demande — ')}{choice}"); ax.legend()
-                if log_scale_od: ax.set_yscale("log")
+                ax.plot(ts_df["dt"], ts_df["supply"].replace(0, np.nan), label="Supply")
+                ax.plot(ts_df["dt"], ts_df["demand"].replace(0, np.nan), label="Demand")
+                ax.set_xlabel("Temps"); ax.set_ylabel("Quantités"); ax.legend()
                 st.pyplot(fig, clear_figure=True)
 
-                st.subheader(T("Évolution des prix (ultra clean)"))
+                # Prix
                 price_df = ts_df.copy()
                 price_df["buy_po"] = (price_df["buy"] / 100.0).round(2)
-                price_df["sell_net_po"] = (price_df["sell"] * 0.85 / 100.0).round(2)
+                price_df["sell_net_po"] = (price_df["sell"] * TP_NET / 100.0).round(2)
                 fig2, ax2 = plt.subplots(figsize=(11, 4))
-                ax2.plot(price_df["dt"], price_df["buy_po"], label=T("Achat (PO)"))
-                ax2.plot(price_df["dt"], price_df["sell_net_po"], label=T("Vente nette 85% (PO)"))
-                ax2.set_xlabel(T("Temps")); ax2.set_ylabel(T("Prix (g)"))
-                ax2.set_title(f"{T('Prix — ')}{choice}"); ax2.legend()
+                ax2.plot(price_df["dt"], price_df["buy_po"], label="Buy (g)")
+                ax2.plot(price_df["dt"], price_df["sell_net_po"], label="Sell 85% (g)")
+                ax2.set_xlabel("Temps"); ax2.set_ylabel("Prix (g)"); ax2.legend()
                 st.pyplot(fig2, clear_figure=True)
+
+with TAB3:
+    st.markdown("""
+    **Conseils rapides**
+    - Réduis le nombre de filtres au strict nécessaire.
+    - Utilise *Recherche nom* pour cibler des familles (ex: *Rune*, *Sceau*, *Inscription*).
+    - La *Qté optimisée* tient compte du budget, de la demande et, si possible, du rythme de ventes historique.
+    """)
+    st.markdown("""
+    **Astuces UI**
+    - Bascule *Compact* pour une vue plus lisible.
+    - Le CSV exporte exactement les colonnes affichées.
+    """)
+
+with TAB4:
+    st.write("GW2TP Flips v2 — UI simplifiée. Inspiré de la version originale d'escarbeille.")
+    st.write("Open-source friendly. N'hésite pas à modifier/adapter.")
+    st.caption("Made with ❤️ and Streamlit.")
