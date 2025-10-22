@@ -374,8 +374,19 @@ PRESET_TO_RISK = {"Prudent": 20, "Équilibré": 50, "Agressif": 80}
 
 
 def add_risk_score(df: pd.DataFrame, risk_level: int) -> pd.DataFrame:
+    # Toujours renvoyer une colonne 'Score' pour éviter les KeyError en cas de DataFrame vide
     if df.empty:
-        return df
+        return df.assign(Score=pd.Series(dtype=float))
+    w_roi = risk_level / 100.0
+    w_vol = 1 - w_roi
+    roi = df["ROI (%)"].clip(lower=0).fillna(0)
+    vol = np.log10(df["Quantité (min)"].fillna(0) + 1)
+
+    def norm(s):
+        return (s - s.min()) / (s.max() - s.min()) if s.max() > s.min() else s * 0
+    df = df.copy()
+    df["Score"] = (w_roi * norm(roi) + w_vol * norm(vol)).round(3)
+    return df
     w_roi = risk_level / 100.0
     w_vol = 1 - w_roi
     roi = df["ROI (%)"].clip(lower=0).fillna(0)
@@ -629,7 +640,14 @@ if enable_history:
 view = add_risk_score(view, risk_level)
 view["Profit/h (est)"] = compute_profit_per_hour(view, hist_hours, safety_pct, enable_history)
 
-# Tri
+# Tri (robuste même si certaines colonnes manquent ou si la vue est vide)
+sort_cols_fast = [c for c in ["Profit/h (est)", "Profit Net (PO)"] if c in view.columns]
+sort_cols_slow = [c for c in ["Score", "Profit Net (PO)"] if c in view.columns]
+if not view.empty:
+    cols = sort_cols_fast if fast_mode else sort_cols_slow
+    if cols:
+        view = view.sort_values(cols, ascending=[False]*len(cols))
+# Fin Tri
 if fast_mode:
     view = view.sort_values(["Profit/h (est)", "Profit Net (PO)"], ascending=[False, False])
 else:
@@ -724,7 +742,7 @@ with TAB1:
                     "Prix Achat (g)": round(buy_c/10000.0,2),
                     "Qté": take,
                     "Coût (g)": round(cost_c/10000.0,2),
-                    "Profit unitaire (g)": float(r["Profit Net (PO)"]),
+                    "Profit unitaire (g)": float(r["Profit Net (PO)"]);
                     "Profit/h item": float(r["Profit/h (est)"]),
                     "ChatCode": r["ChatCode"],
                 })
