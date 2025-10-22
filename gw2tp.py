@@ -529,6 +529,5 @@ with TAB3:
     """)
 
 with TAB4:
-    st.write("GW2TP Flips v2 — UI simplifiée. Inspiré de la version originale d'escarbeille.")
-    st.write("Open-source friendly. N'hésite pas à modifier/adapter.")
-    st.caption("Made with ❤️ and Streamlit.")
+    st.caption("🔨 escarbeille.4281 · 💬 Discord: escarmouche")
+
